@@ -1,0 +1,1256 @@
+---
+title: "Template test for SPPU"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+Ceci est le template pour pouvoir uniformiser les données.
+
+# Packages
+```{r packages import, include=FALSE}
+rm(list = ls())
+setwd(getwd())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# Data 
+
+#### Data importation 
+##### IsaTAB
+The isaTAB data contains the position of the plants (row, column and replication)
+
+##### Environment
+The environment data contains the temperature, relative humidity, PAR etc of the greenhouse.
+
+##### Time Series
+The experimental data is divided between a time series of data everyday and an end point data.
+There are also sometimes data between everyday data and end point data, which will be called some other.
+
+
+
+#### Data preparation
+
+We need to prepare the data for the next step. 
+
+By using the rename function, we can standardize the dataframe.
+```{r Data importation, echo=FALSE}
+# Find the files
+list.files()
+
+# This cell is different for each platform
+S_imaging <- read_excel("Rgb1_Morpho_Plant.xlsx")
+T_imaging <- read_excel("Rgb2_Morpho_Plant.xlsx")
+data_environment <- read_excel("env_multisensor.xlsx")
+
+# Get the coordinates
+isaTAB <- read_excel("ISA_EPPN2020_SPPU.xlsx", sheet = "s_exp")
+coordinates <- coordinates_isaTAB(isaTAB)
+
+head(coordinates)
+head(S_imaging)
+head(T_imaging)
+head(data_environment)
+```
+
+```{r Data preparation, echo=FALSE}
+################################################################################
+# COORDINATES
+################################################################################
+# Unit.ID 
+coordinates$Unit.ID <- seq_len(nrow(coordinates))
+# Reference for Sample.Name et Unit.ID
+reference <- coordinates[, c("Sample.Name", "Unit.ID")]
+## We can then copy dataset2$Unit.ID <- reference$Unit.ID[match(dataset2$Sample.Name, reference$Sample.Name)]
+
+################################################################################
+# S_IMAGING
+################################################################################
+
+# Time, Date and Timestamp
+S_imaging$Timestamp <- as.POSIXct(S_imaging$`Measuring Time`, format = "%Y-%m-%d %H:%M:%S")
+S_imaging$Date <- sapply(strsplit(as.character(S_imaging$Timestamp), split = " "), '[', 1)
+S_imaging$Time <- sapply(strsplit(as.character(S_imaging$Timestamp), split = " "), '[', 2)
+
+# Name of the platform
+S_imaging$Platform <- "SPPU"
+
+# Unit.ID
+S_imaging$Unit.ID <- reference$Unit.ID[match(S_imaging$`Plant ID`, reference$Sample.Name)]
+
+# Rename the columns for the template
+S_imaging <- rename(S_imaging,
+                     Genotype = `Plant Name`,
+                     Soil = `Plant Info`,
+                     S_Area = AREA_PX,
+                     S_Area_mm_squared = AREA_MM,
+                     S_Perimeter = PERIMETER_PX,
+                     S_Perimeter_mm = PERIMETER_MM,
+                     S_Compactness = COMPACTNESS,
+                     S_Width = WIDTH_PX,
+                     S_Width_mm = WIDTH_MM,
+                     S_Height = HEIGHT_PX,
+                     S_Height_mm = HEIGHT_MM
+                     )
+
+# There are two views (0 and 90) for the Area, Perimeter, Compactness, Width, Height
+# For the Area, Perimeter, Compactness, Width we approximate by the max of the two values
+
+
+
+
+# For the Height, we approximate by the mean of the two values
+
+################################################################################
+# T_IMAGING
+################################################################################
+
+# Time, Date and Timestamp
+T_imaging$Timestamp <- as.POSIXct(T_imaging$`Measuring Time`, format = "%Y-%m-%d %H:%M:%S")
+T_imaging$Date <- sapply(strsplit(as.character(T_imaging$Timestamp), split = " "), '[', 1)
+T_imaging$Time <- sapply(strsplit(as.character(T_imaging$Timestamp), split = " "), '[', 2)
+
+# Name of the platform
+T_imaging$Platform <- "SPPU"
+
+# Unit.ID
+T_imaging$Unit.ID <- reference$Unit.ID[match(T_imaging$`Plant ID`, reference$Sample.Name)]
+
+# Rename the columns for the template
+T_imaging <- rename(T_imaging,
+                       Genotype =  `Plant Name`,
+                       Soil = `Plant Info`,
+                       T_Area = AREA_PX,
+                       T_Area_mm_squared = AREA_MM,
+                       T_Perimeter = PERIMETER_PX,
+                       T_Perimeter_mm = PERIMETER_MM,
+                       T_Compactness = COMPACTNESS,
+                       T_Roundness = ROUNDNESS,
+                       T_Roundness2 = ROUNDNESS2,
+                       T_Isotropy = ISOTROPY,
+                       T_Eccentricity = ECCENTRICITY,
+                       T_RMS = RMS,
+                       T_SOL = SOL
+                       )
+
+
+################################################################################
+# DATA_ENVIRONMENT
+################################################################################
+head(data_environment)
+# TO DO
+
+```
+#### Camera angles and variables
+
+```{r}
+
+# Exemple de dataframe
+data <- S_imaging
+
+data <- data.frame(
+  Unit.ID = rep(1:3, each = 10),
+  Timestamp = rep(seq.POSIXt(from = as.POSIXct("2020-06-17 08:00:00"), by = "min", length.out = 10), 3),
+  Angle = rep(c(0, 90), 15),
+  S_Area_mm_squared = runif(30, 50, 150),
+  S_Perimeter_mm = runif(30, 20, 80)
+)
+
+# Liste unique des Unit.ID
+plant_ids <- unique(data$Unit.ID)
+
+# Dataframe pour stocker les résultats finaux
+final_results <- data.frame()
+
+for (pid in plant_ids) {
+  print(pid)
+  # 3. Créer un nouveau tableau par Unit.ID
+  subset_data <- subset(data, Unit.ID == pid)
+
+    # 6. Prendre les lignes deux par deux
+    n <- nrow(subset_data)
+    averages <- data.frame()
+    print(n)
+    for (i in seq(1, n, by = 2)) {
+      if (i+1 <= n) {
+        row1 <- subset_data[i, ]
+        row2 <- subset_data[i+1, ]
+        
+        # Calculer les moyennes et les valeurs maximales
+        max_area <- max(c(row1$S_Area_mm_squared, row2$S_Area_mm_squared))
+        max_perimeter <- max(c(row1$S_Perimeter_mm, row2$S_Perimeter_mm))
+        
+        # Stocker les résultats dans un dataframe temporaire
+        temp <- data.frame(
+          Unit.ID = pid,
+          Timestamp1 = row1$Timestamp,
+          Timestamp2 = row2$Timestamp,
+          Mean_Area_mm_squared = mean_area,
+          Max_Perimeter_mm = max_perimeter
+        )
+        max_area <- 0
+        max_perimeter <- 0
+        
+        averages <- rbind(averages, temp)
+      }
+    }
+    
+    # 7. Stocker les valeurs dans le grand tableau
+    final_results <- rbind(final_results, averages)
+  }
+
+
+
+
+```
+
+
+## Data frame templates
+
+We need to create a dataframe that can support all the variables of the experiments. The uniformisation of the data will be useful for further investigation. 
+
+plant_info : information about the plant.
+
+endpoint : phenotyping information for the end of the experiment. 
+
+weekly_plant : phenotyping or computed information of the plants during the experiment, but not daily data.
+weekly_root : same but for the roots.
+
+timeseries_shoot_and_plant : computed information of the plants daily during the experiment. It can be raw uncomputed information too.
+S_timeseries_shoot : SIDEVIEW cameras computed or raw information 
+T_timeseries_shoot : TOPVIEW cameras computed or raw information
+timeseries_root : computed or raw information of the root data. Only 2 platforms actually have root data. 
+
+
+TEMPLATE
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(coordinates$Unit.ID),
+                 Genotype = factor(isaTAB$`Source Name`),
+                 Soil = factor(isaTAB$`Factor Value[e.g. SomeTreatment]`),
+                 Replication = factor(coordinates$rep),
+                 Row = factor(coordinates$nrow),
+                 Column = factor(coordinates$ncol),
+                 Platform = "SPPU"
+                 )
+```
+
+
+TEMPLATE
+```{r Templates, include=FALSE}
+
+endpoint <- data.frame(plant_info,
+                       Time = NA, 
+                       Date = NA,
+                       Timestamp = NA,
+                       DW_shoot_g = NA,
+                       DW_root_g = NA,
+                       FW_shoot_g = NA,
+                       FW_rhoot_g = NA,
+                       Total_root_length_scan_cm = NA,
+                       Measured_root_angle = NA,
+                       Root_number = NA,
+                       Measured_plant_height_cm = NA,
+                       Leaf_number= NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cm_squared = NA
+                       )
+
+
+weekly_plant <- data.frame(plant_info,
+                           Time = NA,
+                           Date = NA,
+                           Timestamp = NA,
+                           Leaf_number = NA,
+                           Ligulated_leaf_number = NA,
+                           Plant_emergence = NA,
+                           Measured_plant_biomass = NA,
+                           Plant_transpiration = NA,
+                           Daily_wu = NA,
+                           Total_wu = NA,
+                           Wue = NA,
+                           Measured_plant_height_cm = NA
+                           )
+
+
+weekly_root <- data.frame(plant_info,
+                          Time = NA, 
+                          Date = NA,
+                          Timestamp = NA,
+                          Primary_root_length_cm = NA,
+                          Lateral_root_length_cm = NA,
+                          Seminal_nodal_root_length_cm = NA,
+                          Total_root_length_cm = NA,
+                          Root_system_depth_cm = NA,
+                          Root_system_width_cm = NA,
+                          Root_system_convex_hull_area_cm_squared = NA
+                          )
+
+
+timeseries_shoot_and_plant <- data.frame(plant_info,
+                               Time = NA, 
+                               Date = NA,
+                               Timestamp = NA,
+                               Shoot_Measured_height_mm = NA,
+                               Shoot_Computed_height_mm = NA,
+                               Shoot_Projected_shoot_area_cm_squared = NA,
+                               Plant_Height_mm = NA,
+                               Plant_Biomass_g = NA,
+                               Plant_Leaf_area_mm_squared = NA,
+                               Wue = NA,
+                               Bounding_width = NA,
+                               Bounding_height = NA
+                               )
+                      
+
+S_timeseries_shoot <- data.frame(plant_info,
+                               Time = S_imaging$Time, 
+                               Date = date(S_imaging$Date),
+                               Timestamp = S_imaging$Timestamp,
+                               S_Height = as.numeric(S_imaging$S_Height),
+                               S_Height_mm = as.numeric(S_imaging$S_Height_mm),
+                               S_Height_above_reference = NA,
+                               S_Height_above_reference_cm = NA,
+                               S_Area_mm_squared = as.numeric(S_imaging$S_Area_mm_squared),
+                               S_Area = as.numeric(S_imaging$S_Area),
+                               S_Area_cm_squared = NA,
+                               S_Perimeter = as.numeric(S_imaging$S_Perimeter),
+                               S_Perimeter_mm = as.numeric(S_imaging$S_Perimeter_mm),
+                               S_Compactness = as.numeric(S_imaging$S_Compactness),
+                               S_Width = as.numeric(S_imaging$S_Width),
+                               S_Width_mm = as.numeric(S_imaging$S_Width_mm),
+                               S_Solidity = NA,
+                               S_Convex_hull_area = NA,
+                               S_Convex_hull_area_pixel = NA,
+                               S_Convex_hull_perimeter_pixel = NA,
+                               S_Height_over_pot_pixel = NA,
+                               S_Object_sum_area = NA
+                               )
+
+T_timeseries_shoot <- data.frame(plant_info,
+                               Time = T_imaging$Time, 
+                               Date = date(T_imaging$Date),
+                               Timestamp = T_imaging$Timestamp,
+                                 T_Area_mm_squared = as.numeric(T_imaging$T_Area_mm_squared),              
+                                 T_Area_cm_squared = NA,
+                                 T_Area = as.numeric(T_imaging$T_Area),
+                                 T_Perimeter = as.numeric(T_imaging$T_Perimeter),
+                                 T_Perimeter_mm = as.numeric(T_imaging$T_Perimeter_mm),
+                                 T_Compactness = as.numeric(T_imaging$T_Compactness),
+                                 T_Roundness = as.numeric(T_imaging$T_Roundness),
+                                 T_Roundness2 = as.numeric(T_imaging$T_Roundness2),
+                                 T_Isotropy = as.numeric(T_imaging$T_Isotropy),
+                                 T_Eccentricity = as.numeric(T_imaging$T_Eccentricity),
+                                 T_Rms = as.numeric(T_imaging$T_RMS),
+                                 T_Sol = as.numeric(T_imaging$T_SOL),
+                                 T_Convex_hull_perimeter_pixel = NA,
+                                 T_Convex_hull_area = NA,
+                                 T_Convex_hull_area_mm_squared = NA,
+                                 T_Width_pixel = NA,
+                                 T_Object_sum_area = NA,
+                                 T_Solidity = NA
+                                 )
+
+
+timeseries_root <- data.frame(plant_info,
+                              Time = NA, 
+                              Date = NA,
+                              Timestamp = NA,
+                              var1 = NA,
+                              var2 = NA
+)
+
+climate <- data.frame(Time = NA, Date = NA, Timestamp = NA,
+                      Temperature = NA,
+                      Relative_humidity = NA,
+                      Light = NA,
+                      CO2 = NA,
+                      Soil_moisture = NA,
+                      Soil_temperature = NA,
+                      Vapour_pressure_deficit = NA,
+                      Saturation_vapour_pressure = NA,
+                      PAR_ue = NA,
+                      Solar_radiation = NA,
+                      Supplemental_radiation = NA,
+                      Plant_level_radiation = NA
+                      )
+
+
+timeseries_water <- data.frame(Unit.ID = as.factor(data_water$Unit.ID), 
+                                         Genotype = as.factor(data_water$Genotype), 
+                                         Soil = NA, 
+                                         Replication = as.factor(data_water$Replication), 
+                                         Row = as.factor(data_water$Row), 
+                                         Column = as.factor(data_water$Column),
+                               Time = data_water$Time, 
+                               Date = data_water$Date,
+                               Timestamp = data_water$Timestamp,
+                               Irrigation = as.numeric(data_water$Irrigation),
+                               Water_consumed = as.numeric(data_water$Water_consumed)
+                               )
+
+
+
+data_frame_total <- cbind(endpoint, weekly_plant, weekly_root, timeseries_shoot_and_plant, S_timeseries_shoot, T_timeseries_shoot, timeseries_root)
+
+```
+
+
+
+### Data frame info
+
+plant_info dataframe
+```{r Data frame info : plant_info dataframe, echo=FALSE}
+names(plant_info)
+```
+endpoint dataframe
+```{r Dataframe info : endpoint dataframe, echo=FALSE}
+names(endpoint[ ,8:ncol(endpoint)])
+```
+weekly_plant dataframe
+```{r Dataframe info : weekly_plant dataframe, echo=FALSE}
+names(weekly_plant[ ,8:ncol(weekly_plant)])
+```
+weekly_root dataframe
+```{r Dataframe info : weekly_root dataframe, echo=FALSE}
+names(weekly_root[ ,8:ncol(weekly_root)])
+```
+timeseries_shoot_and_plant dataframe
+```{r Dataframe info : timeseries_shoot_and_plant dataframe, echo=FALSE}
+names(timeseries_shoot_and_plant[ ,8:ncol(timeseries_shoot_and_plant)])
+```
+S_timeseries_shoot and T_timeseries_shoot dataframes
+```{r Dataframe info : S_timeseries_shoot and T_timeseries_shoot dataframes, echo=FALSE}
+names(S_timeseries_shoot[ ,8:ncol(S_timeseries_shoot)])
+names(T_timeseries_shoot[ ,8:ncol(T_timeseries_shoot)])
+```
+timeseries_root dataframe
+```{r Dataframe info : timeseries_root dataframe, echo=FALSE}
+names(timeseries_root[ ,8:ncol(timeseries_root)])
+```
+climate
+```{r Dataframe info : climate, echo=FALSE}
+names(climate)
+```
+
+# List of variables
+On enlève les colonnes qui contiennent que des NA et après on prend les variables (qui ne sont pas dans plant_info du coup).
+
+```{r Variables extraction, echo=FALSE}
+df <- endpoint[,colSums(is.na(endpoint))<nrow(endpoint)]
+variables <- colnames(df[, c(10:ncol(df))])
+variables
+```
+
+# Exploration of the endpoint data (data_pheno) and normality hypotheses
+
+## Exploration tables using the janitor package
+
+```{r Exploration tables, echo=FALSE}
+get_summary_stats(data = endpoint, 
+                  variables[1], variables[2],
+                  type = "common")
+endpoint %>% 
+  count(Genotype)
+```
+## Exploration statistics for the variables
+
+```{r Exploration statistics, echo=FALSE}
+skim(endpoint[, unlist(variables)])
+```
+
+## Boxplots, density histograms and qqPlots
+
+```{r Exploration graphs, echo=FALSE}
+## Boxplots
+
+# We add a variable PlantType
+endpoint$Plant_type <- substr(endpoint$Genotype, nchar(as.character(endpoint$Genotype)), nchar(as.character(endpoint$Genotype)))
+
+boxplot1 <- ggplot(endpoint, aes(y = endpoint[ , colnames(endpoint)==variables[1]]))+
+  geom_boxplot(aes(x = Genotype, fill = Plant_type))+
+  labs(title = variables[1], y = variables[1])
+
+boxplot2 <- ggplot(endpoint, aes(y = endpoint[ , colnames(endpoint)==variables[2]]))+
+  geom_boxplot(aes(x = Genotype, fill = Plant_type))+
+  labs(title = variables[2], y = variables[2])
+
+combined <- boxplot1 + boxplot2 & theme(legend.position = "bottom")
+combined + plot_layout(guides = "collect")
+```
+
+## Remove the outliers, replacing them with NULL values and normality verification
+
+```{r Remove outlayers, echo=FALSE}
+# Create a clean dataset that will contain the data without the outlyers
+endpoint_clean <- endpoint
+
+
+## Outlayer detection function
+isoutlayer <- function(independent_variable, genotype, proba = 0.05) {
+  data <- data.frame(genotype, independent_variable)
+  data$genotype <- as.factor(data$genotype)
+  
+  # Linear model fit
+  fit <- lm(independent_variable ~ genotype, data)
+  
+  # Density histogram of residuals - Normality test
+  density_histogram <- ggplot(data = data.frame(x = fit$residuals), aes(x = x)) +
+    geom_histogram(aes(y = ..density..), bins = 20, color = 4, fill = 4, alpha = 0.5) +
+    labs(title = "Density histogram of residuals", x = "Residuals", y = "Density")+
+    geom_density(color = "blue", size = 0.7, linetype = "dashed")+
+    stat_function(fun = dnorm, args = list(mean = mean(fit$residuals), sd = sd(fit$residuals)), color = "red", size = 0.7)
+    
+  # Boxplot of residuals
+  boxplot <- ggplot(data = data.frame(x = fit$residuals), aes(y = fit$residuals))+
+  geom_boxplot(aes(x = genotype, fill = genotype))+
+  labs(title = "Boxplot of residuals", y = variables[1])
+  
+  # qqPlot of residuals
+  qqplot <- qqPlot(fit$residuals)
+  
+  # Show graphs
+  grid.arrange(density_histogram, boxplot, ncol = 2)
+  print(qqplot)
+  
+  # Return logical vector for the outlayers values
+  return(abs(fit$residuals) > 2.0 * summary(fit)$sigma) 
+}
+
+# Run the function on the dataset for all the variables
+endpoint_clean[[variables[1]]][isoutlayer(endpoint[[variables[1]]], endpoint$Genotype)] <- NA
+endpoint_clean[[variables[2]]][isoutlayer(endpoint[[variables[2]]], endpoint$Genotype)] <- NA
+
+```
+
+## Violin and sina plots after outlier detection
+
+```{r}
+# Violin and sina plots
+
+violin1 <- ggplot(endpoint_clean, aes(y = FW_shoot_g, x = Genotype))+
+  geom_violin(aes(fill = Plant_type), color = "white", alpha = 0.4)+
+  geom_sina(size=1, aes(color = Plant_type))+
+  theme(legend.position = "none")+
+  labs(title = variables[1])+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+violin2 <- ggplot(endpoint_clean, aes(y = Measured_plant_height_cm, x = Genotype))+
+  geom_violin(aes(fill = Plant_type), color = "white", alpha = 0.4)+
+  geom_sina(size=1, aes(color = Plant_type))+
+  theme(legend.position = "none")+
+  labs(title = variables[2])+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+combined <- violin1 + violin2 & theme(legend.position = "bottom")
+combined + plot_layout(guides = "collect")
+```
+
+## Exploration statistics for the variables after outlier detection
+
+```{r}
+skim(endpoint_clean[, unlist(variables)])
+
+# For Measured_plant_height_cm
+endpoint_clean %>% 
+  group_by(Genotype) %>% 
+  summarize(mean    = mean(Measured_plant_height_cm, na.rm=TRUE),
+            std.dev = sd(Measured_plant_height_cm, na.rm=TRUE),
+            n_missing  = sum(is.na(Measured_plant_height_cm))) %>% 
+  arrange(desc(mean)) %>% # sort
+  print(n=Inf) # print full table
+
+# For FW_shoot_g
+endpoint_clean %>% 
+  group_by(Genotype) %>% 
+  summarize(mean    = mean(FW_shoot_g, na.rm=TRUE),
+            std.dev = sd(FW_shoot_g, na.rm=TRUE),
+            n_missing  = sum(is.na(FW_shoot_g))) %>% 
+  arrange(desc(mean)) %>% # sort
+  print(n=Inf) # print full table
+
+```
+
+# Statistical models for phenotypic traits
+
+```{r}
+desplot(data = endpoint,
+        form = Genotype ~ Column + Row | Replication,            # fill color per genotype, headers per replicate
+        text = Genotype, cex = 0.7, shorten = "no",   # show genotype names per plot
+        out1 = Row, out1.gpar=list(col="black"), # lines between rows
+        out2 = Column, out2.gpar=list(col="black"), # lines between columns
+        main = "Field layout", show.key = F)     # formatting
+```
+
+
+La variable explicative(X) sera le génotype, variable catégorielle.
+Les réponses(Y) sont les données phénotypiques (dans ce cas-ci la FW_shoot_g et la Measured_plant_height_cm)
+
+```{r Genotype chart and variables, echo=FALSE}
+unique(endpoint$Genotype)
+variables
+```
+
+## Genotype comme variable explicative(X) des variables du vecteur variables
+
+On a comme réponse(Y) le FW_shoot_g et le Measured_plant_height_cm
+
+On prend les variables Row et Column, qu'on fixe comme aléatoires ou comme fixes.
+
+```{r Linear models, echo=FALSE}
+# Linear model of Measured_plant_height_cm wit Rows and Columns as fixed effects
+mod1 <- lm(Measured_plant_height_cm ~ Genotype + Row + Column, endpoint_clean)
+summary(mod1)
+anova(mod1)
+
+# Linear model of Measured_plant_height_cm with Rows and Columns as random effects
+mod2 <- lmer(Measured_plant_height_cm ~ Genotype + (1|Row) + (1|Column), endpoint_clean)
+summary(mod2)
+ranova(mod2)
+
+# Linear model of FW_shoot_g with Rows and Columns as random effects
+mod3 <- lm(FW_shoot_g ~ Genotype + Row + Column, endpoint_clean)
+summary(mod3)
+anova(mod3)
+
+# Linear model of FW_shoot_g with Rows and Columns as random effects
+mod4 <- lmer(FW_shoot_g ~ Genotype + (1|Row) + (1|Column), endpoint_clean)
+summary(mod4)
+anova(mod4)
+ranova(mod4)
+
+# Linear model of Soil?
+#mod3 <- lm(Soil ~ Genotype + (1|Row) + (1|Column), endpoint_clean)
+#summary(mod3)
+#anova(mod3)
+```
+
+```{r}
+# Linear model of Measured_plant_height_cm with Rows and Columns as random effects
+endpoint_clean$Plant_type <- as.factor(endpoint_clean$Plant_type)
+# Rajouter colonne avec le "numéro" de génotype
+
+endpoint_clean$Plant_type <- relevel(endpoint_clean$Plant_type, ref = "T") # T as base level
+mod <- lmer(Measured_plant_height_cm ~ Plant_type + (1|Row) + (1|Column), endpoint_clean)
+summary(mod)
+```
+
+
+```{r}
+modasreml <- asreml(fixed = Measured_plant_height_cm ~ Genotype,
+                    random = ~ Row + Column,
+                    residual = ~  NULL,
+                    data = endpoint_clean)
+
+plot(modasreml)
+
+summary(modasreml)$varcomp
+
+
+```
+
+
+```{r}
+tdat <- data.frame(predicted=predict(mod1), residual = residuals(mod1), Genotype=endpoint_clean$Genotype)
+ggplot(tdat,aes(x=predicted,y=residual, colour=Genotype)) + geom_point() + geom_hline(yintercept=0, lty=3)
+
+# Faire pareil avec les prédictions des hybrides et des lignées pures
+endpoint_clean$pred <- predict(mod1)
+ggplot(endpoint_clean,aes(x=Measured_plant_height_cm,y=pred,colour=Genotype, group=Genotype)) + geom_point() + geom_line() + theme(legend.position="bottom", legend.direction = "horizontal")
+```
+
+```{r eval=FALSE, include=FALSE}
+# Ajustement du modèle linéaire mixte avec Row et Column comme facteurs aléatoires
+model <- buildmer(DW_shoot_g ~ Genotype + (1 | Column) + (1| Row) + (1 | Replication), data = endpoint_clean)
+
+# Affichage des résultats
+summary(model)
+
+```
+
+
+
+## On rajoute le sol en variable explicative(X), au même titre que le génotype
+
+Expliquer une réponse quantitative (Y) à partir de plusieurs facteurs quantitatifs et/ou catégoriels.
+
+```{r Linear model with soil factor, eval=FALSE, include=FALSE}
+mod1 <- lm(Measured_plant_height_cm ~ Genotype*Soil  + (1|Row) + (1|Column), endpoint_clean) # En prenant en compte l'interaction Genotype x Sol
+summary(mod1)
+ranova(mod1)
+
+mod2 <- lm(Measured_plant_height_cm ~ Genotype + Soil  + (1|Row) + (1|Column), endpoint_clean) # Sans prendre en compte l'interaction Genotype x Sol
+summary(mod2)
+ranova(mod2)
+
+# ETC POUR LE FW_SHOOT_G
+```
+
+# ANALYSE DES DONNEES MULTIVARIEES
+
+PCA, clustering, etc, voir p.56 biométrie 1
+```{r}
+
+```
+
+
+# Exploration of the timeseries data
+
+## For the timeseries_shoot_and_root dataframe 
+### Variables of interest
+
+```{r}
+df_shoot_and_plant <- timeseries_shoot_and_plant[,colSums(is.na(timeseries_shoot_and_plant))<nrow(timeseries_shoot_and_plant)]
+variables_1 <- colnames(df_shoot_and_plant[, c(10:ncol(df_shoot_and_plant))])
+variables_1
+```
+
+## Number of data observations per day for the traits of the timeseries datasets
+### Histogram
+
+```{r Histograms}
+h1 <- ggplot(timeseries_shoot_and_plant, aes(x = Date)) +
+  geom_bar(aes(fill = Genotype), position = "stack", width = 1) +
+  scale_fill_viridis_d(option = "D") +
+  labs(x = "Date", y = "Number of observations", title = "Observations per day for timeseries_shoot_and_plant") +
+  scale_y_continuous(breaks = seq(from = 0, to = 325, by = 25)) +
+  scale_x_date(date_breaks = "2 days", date_labels = "%d-%m-%Y") +  # Exemple de format de date (%d-%m-%Y)
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+
+h2 <- ggplot(S_timeseries_shoot, aes(x = Date)) +
+  geom_bar(aes(fill = Genotype), position = "stack", width = 1) +
+  scale_fill_viridis_d(option = "D") +
+  labs(x = "Date", y = "Number of observations", title = "Observations per day for S_timeseries_shoot") +
+  scale_y_continuous(breaks = seq(from = 0, to = 325, by = 25)) +
+  scale_x_date(date_breaks = "2 days", date_labels = "%d-%m-%Y") +  # Exemple de format de date (%d-%m-%Y)
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+h3 <- ggplot(T_timeseries_shoot, aes(x = Date)) +
+  geom_bar(aes(fill = Genotype), position = "stack", width = 1) +
+  scale_fill_viridis_d(option = "D") +
+  labs(x = "Date", y = "Number of observations", title = "Observations per day for T_timeseries_shoot") +
+  scale_y_continuous(breaks = seq(from = 0, to = 325, by = 25)) +
+  scale_x_date(date_breaks = "2 days", date_labels = "%d-%m-%Y") +  # Exemple de format de date (%d-%m-%Y)
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+h4 <- ggplot(timeseries_water, aes(x = Date)) +
+  geom_bar(aes(fill = Genotype), position = "stack", width = 0.5) +
+  scale_fill_viridis_d(option = "D") +
+  labs(x = "Date", y = "Number of observations", title = "Observations per day for timeseries_water") +
+  scale_y_continuous(breaks = seq(from = 0, to = 325, by = 25)) +
+  scale_x_date(date_breaks = "2 days", date_labels = "%d-%m-%Y") +  # Exemple de format de date (%d-%m-%Y)
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotation des étiquettes des dates
+        panel.grid.major.x = element_line(color = "lightgray", size = 0.5),  # Paramètres de la grille
+        panel.grid.minor.x = element_blank())  # Supprimer les lignes de grille mineures
+
+combined <- h1 + h2 + h3 +h4 & theme(legend.position = "top")
+combined + plot_layout(guides = "collect")
+
+```
+
+## For the S_timeseries_shoot dataframe
+
+### Variables of interest
+
+```{r}
+df_S_timeseries_shoot <- S_timeseries_shoot[,colSums(is.na(S_timeseries_shoot))<nrow(S_timeseries_shoot)]
+variables_1 <- colnames(df_S_timeseries_shoot[, c(10:ncol(df_S_timeseries_shoot))])
+variables_1
+```
+
+## Create the timepoint object for the S_timeseries_shoot
+
+
+
+### Time point object
+
+```{r}
+
+```
+
+
+```{r, echo=FALSE}
+WDIR <- getwd()
+subdir <- 'testtemplate'
+datadir <- sprintf( '%s/%s', WDIR, subdir)
+
+colnames(S_timeseries_shoot)[ grepl('height_above', colnames(S_timeseries_shoot))] <- "S_Height_above_reference_cm"
+
+
+
+
+
+timePoint_endpoint <- createTimePoints(dat = S_timeseries_shoot,
+                              experimentName = "EPPN2020_ALSIA",
+                              genotype = "Genotype",
+                              timePoint = "Date",
+                              plotId = "Unit.ID",
+                              rowNum = "Row",
+                              colNum = "Column")
+
+summary(timePoint_endpoint)
+getTimePoints(timePoint_endpoint)
+
+```
+
+## Once the timePoint created
+Count how many observations for the traits
+
+```{r, echo=FALSE}
+
+traits <- variables_1
+
+trait_name <- traits[1]
+
+print("How many observations for var1")
+countValid(timePoint_endpoint, trait_name)
+
+
+num_timepoints <- getTimePoints(timePoint_endpoint)[1,1]
+
+```
+
+## Check the layout at one timepoint
+
+```{r}
+plot(timePoint_endpoint,
+     plotType = "layout",
+     timePoints = num_timepoints,
+     highlight =  c("EPPN1_L", "EPPN2_L", "EPPN3_L", "EPPN4_L", "EPPN1_H", "EPPN2_H", "EPPN3_H", "EPPN4_H", "EPPN20_T"))
+```
+## Check the heatmap of the raw data at one time point
+
+```{r}
+plot(timePoint_endpoint,
+     plotType = "layout",
+     timePoints = num_timepoints,
+     traits = trait_name)
+
+```
+
+## Check some time courses of raw data
+
+```{r}
+plot(timePoint_endpoint, 
+     traits = trait_name,
+     plotType = "raw")
+```
+
+## Boxplot
+
+```{r}
+plot(timePoint_endpoint,
+     plotType = "box",
+     traits = trait_name)
+```
+## First select a subset of plants to adjust the settings
+
+```{r}
+plantSel<- c(1,2)
+```
+
+## Then run on the subset
+
+```{r}
+cutoffA <- 1 
+ci <- c(5)[cutoffA] # confidence interval
+nn <- c(0.5)[cutoffA] # nearest neighbour (0 - 1 greater number smoother curve)
+ce <- c(FALSE)[cutoffA]
+
+
+resuSing_test <- detectSingleOut(TP = timePoint_endpoint,
+                                   trait = trait_name,
+                                   plotIds = plantSel,
+                                   confIntSize = ci,
+                                   nnLocfit = nn,
+                                   checkEdges = ce)
+
+plot(resuSing_test,
+     plotIds = plantSel[1],
+     outOnly = FALSE)
+
+
+plot(resuSing_test,
+     outOnly = FALSE)
+
+```
+
+## Run on all
+
+# FIRST TABLE
+
+```{r}
+resuSing_test <- detectSingleOut(TP = timePoint_endpoint,
+                               trait = trait_name,
+                               confIntSize = ci,
+                               nnLocfit = nn,
+                               checkEdges = ce)
+
+## How many outliers?
+resuSing_test[resuSing_test$outlier == 1,]
+
+
+## How many outliers per date?
+with(resuSing_test[resuSing_test$outlier == 1,], table(timePoint))
+
+#Single_point_outliers <- removeSingleOut(timePoint_endpoint, resuSing_test)
+
+"Enlever le # car il n'y a pas d'outliers"
+
+
+# readr::write_tsv(resuSing_test, sprintf( "%s/singlePointOutliers_%s.tsv", datadir, trait_name))
+
+
+```
+
+## Fit a model 
+
+
+```{r}
+data_imaging_ALSIA <- read.delim("extracted_imaging.txt")
+alsiaData <- data_imaging_ALSIA
+colnames(alsiaData)[ grepl('height_above', colnames(alsiaData))] <- "height_above_reference"
+tname <- "height_above_reference"
+
+phenoTPals <- createTimePoints(dat = alsiaData,
+                               experimentName = "EPPN2020_alsia",
+                               genotype = "genotype",
+                               timePoint = "date",
+                               plotId = "potId",
+                               rowNum = "Row",
+                               colNum = "Column")
+
+
+## Fit a model for all time points with no extra fixed effects.
+modPhenoSp <- fitModels(TP = phenoTPals,
+                        trait = tname,
+                        geno.decomp = "type")
+
+
+plot(modPhenoSp,
+     timePoints = 6, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+#
+plot(modPhenoSp,
+     timePoints = 11, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+plot(modPhenoSp,
+     timePoints = 1, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+
+plot(modPhenoSp,
+     plotType = "timeLapse",
+     spaTrend = "percentage",
+     outFile = sprintf( "%stest.gif", WDIR))
+########################
+
+plot(modPhenoSp, 
+     plotType = "herit",
+     yLim = c(0.4,1))
+
+#|—— Observing the effective dimensions ——|
+
+plot(modPhenoSp,
+     plotType = "effDim",
+     EDType = "ratio",
+     yLim = c(0,1))
+
+#|—— Observing the spatially corrected values ——|
+
+plot(modPhenoSp, 
+     plotType = "corrPred")
+
+
+####################
+
+spatCorrectedAlsia <- getCorrected(modPhenoSp)
+
+
+```
+
+
+```{r}
+## Fit a model for all time points with no extra fixed effects.
+mod <- fitModels(TP = phenoTPals,
+                        trait = tname,
+                        geno.decomp = "type")
+
+
+plot(mod,
+     timePoints = 6, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+#
+plot(mod,
+     timePoints = 11, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+plot(mod,
+     timePoints = 1, 
+     plotType = "spatial",
+     spaTrend = "percentage")
+
+
+#plot(mod, plotType = "timeLapse", spaTrend = "percentage", outFile = sprintf( "%s/testtemplate/test.gif", WDIR))
+
+
+
+##############################################################
+
+plot(mod, 
+     plotType = "herit",
+     yLim = c(0.4,1))
+
+#|—— Observing the effective dimensions ——|
+  
+plot(mod,
+     plotType = "effDim",
+     EDType = "ratio",
+     yLim = c(0,1))
+
+#|—— Observing the spatially corrected values ——|
+  
+plot(mod, 
+     plotType = "corrPred")
+
+
+```
+
+
+
+## Use the splines
+
+```{r}
+
+spatCorrected <- getCorrected(mod)
+
+
+#|—— Fit the spline for every plant and inspect the objects ——|
+severity <- 1
+knots <- c( 30)[severity]
+mintimepoints <- c( 9)[severity]
+
+# No need to select a subset of genotypes
+fit.spline <- fitSpline(inDat = spatCorrected, 
+                             trait = paste0(tname, "_corr"),
+                             knots = knots,
+                             minNoTP = mintimepoints)
+
+# Extracting the tables of predicted values and P-spline coefficients
+predDat <- fit.spline$predDat
+coefDat <- fit.spline$coefDat
+
+#The object fit.spline contains the P-spline model coefficients (coefDat) and the predicted value (pred.value in predDat), i.e the values predicted using the P-spline model coefficients. Predictions are made on a denser grid of time points: the time points for prediction are calculated as the smallest gap between two time points divided by 9, so dividing the smallest gap in 10 segments. The object fit.spline also contains the first and second derivatives (deriv and deriv2 in predDat).
+
+```
+
+## For a plant selection 
+
+```{r}
+########################## 
+
+plantSel <- alsiaData[ grepl('EPPN20_T', alsiaData$genotype), "potId", drop = TRUE]
+
+plot(fit.spline,
+     plotIds = plantSel,
+     plotType =  "predictions")
+
+plot(fit.spline,
+     plotIds = plantSel,
+     plotType =  "derivatives")
+
+plot(fit.spline,
+     plotIds = plantSel,
+     plotType =  "derivatives2")
+```
+
+# Time series outliers
+
+# SECOND TABLE
+
+```{r}
+cutoff <- 1
+thrCor <- c(0.9)[cutoff] # correlation threshold
+thrPca <- c(10)[cutoff] # pca angle threshold
+thrSlope <- c(0.7)[cutoff] # slope threshold
+out <- detectSerieOut(corrDat = spatCorrected,
+                           predDat = predDat,
+                           coefDat = coefDat,
+                           trait = paste0(tname, "_corr"),
+                           thrCor = thrCor,
+                           thrPca = thrPca,
+                           thrSlope = thrSlope,
+                           geno.decomp = "geno.decomp")
+
+plot(out, genotypes = levels(factor(out$genotype)))
+
+
+# Manual check and override decision (when necessary):
+plotToKeep <- c("c13R16")
+outFinal <- out[!(out$plotId %in% plotToKeep),]
+spatCorrectedOut <- spatCorrected
+
+```
+
+# SECOND TABLE
+
+```{r}
+# *************** second Table ***************
+spatCorrectedOut <- removeSerieOut(dat = spatCorrected,
+                                        serieOut = out)
+## remove all point/plant with NA in the LeafArea_corr 
+# WARNINGS: be carefull when removing whole plant from the data !
+colNum <- which(names(spatCorrectedOut) %in% paste0(tname, "_corr"))
+spatCorrectedOut <- spatCorrectedOut[!is.na(spatCorrectedOut[,colNum]),]
+spatCorrectedOut <- droplevels(spatCorrectedOut)
+
+#readr::write_tsv(spatCorrectedOut, sprintf( "%s/timeSeriesOutliers_%s.tsv", datadir, trait_name))
+```
+
+# Refaire tout depuis le début?
+
+```{r eval=FALSE, include=FALSE}
+timePoint_endpointBIS <- createTimePoints(dat = spatCorrectedOut,										
+                                  experimentName = "EPPN2020_clean",
+                                  genotype = "genotype",
+                                  timePoint = "timePoint",
+                                  plotId = "plotId",
+                                  rowNum = "rowId",
+                                  colNum = "colId")
+
+## Correct for spatial
+modBIS <- fitModels(TP = timePoint_endpointBIS,												
+                           trait = paste0(trait_name),
+                           geno.decomp = c("geno.decomp"))
+## Extract corrected values
+spatCorrectedBIS <- getCorrected(modBIS)
+
+#Check the values before and after:
+  
+h21<-plot(mod, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+h22<-plot(modBIS, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+grid.arrange(h21, h22,  nrow = 1) 
+
+#
+ed2<-plot(modBIS,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+ed1<-plot(mod,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+grid.arrange(ed1, ed2,  nrow = 1) 
+
+spatCorr <- 
+  inner_join(spatCorrected[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             spatCorrectedBIS[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             by = c("timeNumber","plotId") )
+
+
+col1 <- paste0(trait_name, "_corr.x")
+col2 <- paste0(trait_name, "_corr.y")
+ggplot(spatCorr, aes(x = .data[[col1]], y = .data[[col2]])) +
+  geom_point(size=3) +
+  geom_abline(slope=1, intercept = 0,col="red",lty=2) +
+  ylab("Outliers removed") + xlab("Outliers") + theme_light()
+
+
+
+# fit Spline again
+
+fit.splineBIS <- fitSpline(inDat = spatCorrectedBIS, 
+                                trait = paste0(trait_name, "_corr"),
+                                knots = 30,
+                                minNoTP = 9)
+
+
+param1bis <- estimateSplineParameters(HTPSpline = fit.splineBIS,
+                           estimate = "derivatives",
+                           what = "max")
+head(param1bis)
+
+param1bis[,'genotype'] <- factor( param1bis[, 'genotype'], 
+                              levels = c( "EPPN20_T", "EPPN1_L", "EPPN1_H", "EPPN2_L", 
+                                          "EPPN2_H", "EPPN3_L", "EPPN3_H", "EPPN4_L", "EPPN4_H"))
+
+
+# Visualize the variability 
+ggplot(param1bis,
+       aes(x = genotype, y = max_derivatives)) + 
+  geom_boxplot(na.rm = TRUE) +
+  ylab("Max growth rate") +
+  theme_classic() 
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

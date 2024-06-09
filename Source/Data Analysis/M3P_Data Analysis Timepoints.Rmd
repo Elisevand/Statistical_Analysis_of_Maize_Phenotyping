@@ -1,0 +1,834 @@
+---
+title: "M3P Data Analysis Timepoints"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Templates/M3P")
+```
+
+Set the right working directory.
+
+```{r}
+rm(list = ls())
+
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/M3P")
+platform <- "M3P"
+```
+
+```{r echo=TRUE, , include=FALSE}
+WDIR <- "C:/Users/elise/Documents/Mémoire/Main/Data"
+subdir <- 'Extracted'
+datadir <- sprintf( '%s/%s', WDIR, subdir)
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+# Import functions
+source("~/Mémoire/Main/Source/functions.R")
+```
+
+# Data importation
+
+Reimport the data sets extracted from the Data Preparation and Data Analysis R Markdown.
+
+```{r}
+list.files()
+
+plant_info <- read.table("plant_info.txt", header = TRUE, sep = "\t")
+endpoint <- read.table("endpoint.txt", header = TRUE, sep = "\t")
+S_timeseries <- read.table("S_timeseries.txt", header = TRUE, sep = "\t")
+
+# plant_info
+plant_info <- lapply(plant_info, factor)
+
+# endpoint
+matching_cols <- intersect(names(endpoint), names(plant_info))
+endpoint[, matching_cols] <- lapply(endpoint[, matching_cols], factor)
+endpoint$Date <- date(endpoint$Date)
+endpoint$Timestamp <- NA
+
+# timeseries
+# No data for M3P
+
+# S_timeseries
+matching_cols <- intersect(names(S_timeseries), names(plant_info))
+S_timeseries[, matching_cols] <- lapply(S_timeseries[, matching_cols], factor)
+S_timeseries$Timestamp <- as.POSIXct(S_timeseries$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+S_timeseries$Date <- date(S_timeseries$Date)
+
+# T_timeseries
+# No data
+
+platform <- "M3P"
+
+# endpoint
+df <- endpoint[,colSums(is.na(endpoint))<nrow(endpoint)]
+genotype_index <- which(colnames(df) == "Genotype")
+variables <- "DW_plant_g"
+
+# timeseries
+# too much data
+
+# S_timeseries
+df_S_timeseries <- S_timeseries[,colSums(is.na(S_timeseries))<nrow(S_timeseries)]
+genotype_index <- which(colnames(df_S_timeseries) == "Genotype")
+variables_S <- colnames(df_S_timeseries[, c(5:(genotype_index - 1))]) # We remove the three first columns that are "Unit.ID","Time" and "Date"
+
+# T_timeseries
+# no data
+
+print(paste(platform, ": The variables for endpoint are", paste(variables, collapse = ", "), sep = " "))
+print(paste(platform, ": The variables for S_timeseries are", paste(variables_S, collapse = ", "), sep = " "))
+
+endpoint$Plant_type <- substr(endpoint$Genotype, nchar(as.character(endpoint$Genotype)), nchar(as.character(endpoint$Genotype)))
+S_timeseries$Plant_type <- substr(S_timeseries$Genotype, nchar(as.character(S_timeseries$Genotype)), nchar(as.character(S_timeseries$Genotype)))
+
+```
+Get the cleaned endpoint data
+
+```{r}
+endpoint_clean <- endpoint
+# Run the function on the dataset for all the variables
+endpoint_clean <- detect_replace_outliers_by_genotype(endpoint_clean)
+
+
+
+# We add a Plant_type variable that is H or L, with T being L
+S_timeseries$Plant_type <- substr(S_timeseries$Genotype, nchar(as.character(S_timeseries$Genotype)), nchar(as.character(S_timeseries$Genotype)))
+
+S_timeseries$Plant_type <- ifelse(S_timeseries$Plant_type %in% c("T", "L"), "Line",
+                                  ifelse(S_timeseries$Plant_type == "H", "Hybrid", S_timeseries$Plant_type))
+```
+
+
+# Time point objects
+
+Generation of the timePoints objects using the function "createTimePoints".
+
+```{r}
+timePoint_endpoint <- createTimePoints(dat = endpoint,
+                                      experimentName = "EPPN2020_M3P",
+                                      genotype = "Genotype",
+                                      timePoint = "Date",
+                                      plotId = "Unit.ID",
+                                      rowNum = "Row",
+                                      colNum = "Column",
+                                      repId = "Replication")
+
+timePoint_endpoint_clean <- createTimePoints(dat = endpoint_clean,
+                                      experimentName = "EPPN2020_M3P",
+                                      genotype = "Genotype",
+                                      timePoint = "Date",
+                                      plotId = "Unit.ID",
+                                      rowNum = "Row",
+                                      colNum = "Column",
+                                      repId = "Replication")
+
+S_timeseries <- S_timeseries %>%
+  group_by(Date, Unit.ID) %>%
+  slice(1) %>% 
+  ungroup()
+
+timePoint_S <- createTimePoints(dat = S_timeseries,
+                              experimentName = "EPPN2020_M3P",
+                              genotype = "Genotype",
+                              timePoint = "Date",
+                              plotId = "Unit.ID",
+                              rowNum = "Row",
+                              colNum = "Column",
+                              repId = "Replication",
+                              addCheck = TRUE,
+                              checkGenotypes = "EPPN20_T")
+
+```
+
+
+## Gentoypic layout 
+
+Check the layout of the platforms' genotypes. 
+
+```{r}
+genotypes_list <- as.character(unique(endpoint$Genotype))
+
+plot(timePoint_endpoint,
+     plotType = "layout",
+     highlight =  genotypes_list,
+     showGeno = FALSE)
+```
+
+## 1. endpoint
+### Comparisons between raw and cleaned data
+
+#### View timePoint object.
+
+```{r}
+summary(timePoint_endpoint)
+getTimePoints(timePoint_endpoint)
+```
+
+#### Count the number of observations per trait.
+
+```{r}
+traits <- variables
+
+for (trait_name in traits) {
+  print(paste("How many data observations for", trait_name))
+  num_observations <- countValid(timePoint_endpoint, trait_name)
+  print(num_observations)
+}
+
+for (trait_name in traits) {
+  print(paste("How many cleaned data observations for", trait_name))
+  num_observations <- countValid(timePoint_endpoint_clean, trait_name)
+  print(num_observations)
+}
+```
+
+#### Check the heatmap of the data at harvest
+
+```{r}
+for (trait_name in traits) {
+  plot(timePoint_endpoint,
+     plotType = "layout",
+     timePoints = 1,
+     traits = trait_name)
+}
+
+for (trait_name in traits) {
+  plot(timePoint_endpoint_clean,
+     plotType = "layout",
+     timePoints = 1,
+     traits = trait_name)
+}
+
+```
+
+## 2. S_timeseries
+### Raw data
+#### View timePoint object
+
+```{r}
+summary(timePoint_S)
+getTimePoints(timePoint_S)
+
+num_timepoints <- getTimePoints(timePoint_S)
+```
+
+#### Count the number of observations per trait and time point
+
+We focus on the Height [cm] and Leaf area, because these are the two most common among the platforms. 
+
+Height is computed for 6 platforms out of 9 and area for 4 out of 9. 
+
+```{r}
+var_voulues <- c(variables_S[1], variables_S[2])
+traits <- var_voulues
+
+for (trait_name in traits) {
+  print(paste("How many observations for", trait_name))
+  valid_count <- countValid(timePoint_S, trait_name)
+  print(valid_count)
+}
+```
+
+#### Check the heatmap of the raw data per time point
+
+```{r}
+for (trait_name in traits) {
+  for (tp in 1:length(num_timepoints$timeNumber)) {
+    plot(timePoint_S,
+         plotType = "layout",
+         timePoints = tp,
+         traits = trait_name)
+  }
+}
+```
+
+#### Check time course of raw data per time point
+
+```{r}
+for (trait_name in traits) {
+  plot(timePoint_S, 
+     traits = trait_name,
+     plotType = "raw")
+}
+```
+
+#### Check the boxplots of raw data per time point
+
+```{r}
+for (trait_name in traits) {
+  plot(timePoint_S,
+     plotType = "box",
+     traits = trait_name)
+}
+```
+
+#### Check the correlation plots of raw data per time point
+
+```{r}
+for (trait_name in traits) {
+  plot(timePoint_S,
+     plotType = "cor",
+     traits = trait_name)
+}
+```
+
+
+### 1. Detection of outliers for single observations
+
+Using the SingleOut detect and single functions. 
+We select a subset of plants to adjust the settings for the confIntSize and nnLocfit.
+
+```{r}
+plantSel<- c(1,2,3,4,5,6,7,8,9,10)
+
+ci <- 5 # confidence interval
+nn <- 0.8 # nearest neighbor
+ce <- FALSE
+```
+
+
+```{r}
+for (trait_name in traits) {
+  variable_name <- paste0("Single_test_", trait_name)
+  
+  single_test <- detectSingleOut(
+    TP = timePoint_S,
+    trait = trait_name,
+    plotIds = plantSel,
+    confIntSize = ci,
+    nnLocfit = nn,
+    checkEdges = TRUE # check for outlier values in start and end of experiment
+  )
+  
+  assign(variable_name, single_test)
+  
+  plot(single_test, outOnly = FALSE)
+}
+```
+
+We can then run on all plants of the data set.
+
+```{r}
+for (trait_name in traits) {
+  single_test_object_name <- paste0("Single_test_", trait_name)
+  Single_test <- get(single_test_object_name)
+    if (any(Single_test$outlier == 1)) {
+    outliers_count <- with(Single_test[Single_test$outlier == 1,], table(timePoint))
+    print(trait_name) 
+    print(outliers_count)
+
+    Single_outliers <- removeSingleOut(timePoint_S, Single_test)
+    assign(paste0("Single_outliers_", trait_name), Single_outliers)
+
+    readr::write_tsv(Single_test, sprintf("%s/single_outliers_%s.tsv", datadir, trait_name))
+  } else {
+    cat("No outlier for", trait_name, "\n")
+  }
+}
+
+```
+
+#### Data visualisation after single observations outliers removal
+##### Heatmap of data
+Check the heatmap of the data with outliers detection at all the time points.
+
+```{r}
+for (trait_name in traits) {
+  single_outliers_name <- paste0("Single_outliers_", trait_name)
+  
+  if (exists(single_outliers_name)) {
+    Single_outliers <- get(single_outliers_name)
+    
+    for (tp in 1:length(num_timepoints$timeNumber)) {
+      plot(Single_outliers,
+           plotType = "layout",
+           timePoints = tp,
+           traits = trait_name)
+    }
+  } else {
+    cat("No object Single_outliers found for trait", trait_name, "\n")
+  }
+}
+```
+
+##### Time course, boxplots and correlation plots of data
+
+```{r}
+for (trait_name in traits) {
+  single_outliers_name <- paste0("Single_outliers_", trait_name)
+  
+  if (exists(single_outliers_name)) {
+    Single_outliers <- get(single_outliers_name)
+    
+    plot(Single_outliers, 
+         traits = trait_name,
+         plotType = "raw")
+    
+    plot(Single_outliers,
+         plotType = "box",
+         traits = trait_name)
+    
+    plot(Single_outliers,
+         plotType = "cor",
+         traits = trait_name)
+    
+  } else {
+    cat("No Single_outliers object found for trait", trait_name, "\n")
+  }
+}
+```
+
+### 2. Correction for spatial trends 
+
+Fit a model for all time points with no extra fixed effects.
+
+```{r}
+#for (trait_name in traits) {
+#  single_outliers_name <- paste0("Single_outliers_", trait_name)
+  
+#  if (exists(single_outliers_name)) {
+#    Single_outliers <- get(single_outliers_name)
+    
+#    assign(paste0("modTP_", trait_name), 
+#           fitModels(TP = Single_outliers,
+#                     trait = trait_name,
+#                     geno.decomp = "Plant_type"))
+#  } else {
+#    assign(paste0("modTP_", trait_name), 
+#           fitModels(TP = timePoint_S,
+#                     trait = trait_name,
+#                     geno.decomp = "Plant_type"))
+#  }
+#}
+
+print("Erreur dans SpATS::SpATS(response = trait, fixed = fixedForm, random = randForm,  : 
+  The design matrix associated to the fixed part of the model is not of full rank. Please check that there are no redundant components in the fixed part of the model.")
+```
+
+####  Model visualisation
+
+```{r}
+for (trait_name in traits) {
+  mod_name <- paste0("modTP_", trait_name)
+  
+  if (exists(mod_name)) {
+    mod <- get(mod_name)
+    
+    for (tp in 1:length(num_timepoints$timeNumber)) {
+      plot(mod,
+           timePoints = tp, 
+           plotType = "spatial",
+           spaTrend = "percentage")
+    }
+    
+    gif_file <- sprintf("%s/%s_mod.gif", datadir, trait_name)
+    
+    plot(mod,
+         plotType = "timeLapse",
+         spaTrend = "percentage",
+         outFile = gif_file)
+  } else {
+    cat("No model found for", trait_name, "\n")
+  }
+}
+```
+
+
+```{r}
+for (trait_name in traits) {
+  mod_name <- paste0("modTP_", trait_name)
+    if (exists(mod_name)) {
+    mod <- get(mod_name)
+    
+    plot(mod,
+         plotType = "rawPred",
+         plotLine = TRUE)
+    
+    plot(mod,
+         plotType = "corrPred",
+         plotLine = TRUE)
+    
+    plot(mod, 
+         plotType = "herit",
+         yLim = c(0, 0.5))
+    
+    plot(mod,
+         plotType = "effDim",
+         EDType = "ratio",
+         yLim = c(0, 1))
+    
+    plot(mod, 
+         plotType = "corrPred")
+  } else {
+    cat("No model found for the trait", trait_name, "\n")
+  }
+}
+```
+
+
+### 3. Outlier detection for series of observations
+
+By using the splines. 
+
+#### fitModels
+
+```{r}
+for (trait_name in traits) {
+  Spatial_Corrected_name <- paste0("Spatial_Corrected_", trait_name)
+  modTP_name <- paste0("modTP_", trait_name)
+}
+```
+
+```{r}
+
+knots <- c(30)
+mintimepoints <- c(9) # Minimal number of observations
+
+for (trait_name in traits) {
+  # Nom de la variable pour les données corrigées
+  Spatial_Corrected_name <- paste0("Spatial_Corrected_", trait_name)
+  modTP_name <- paste0("modTP_", trait_name)
+  
+  # Vérifier si le modèle existe
+  if (exists(modTP_name)) {
+    modTP <- get(modTP_name)
+    Spatial_Corrected <- getCorrected(modTP)
+    assign(Spatial_Corrected_name, Spatial_Corrected)
+    
+    # Ajuster les splines pour les données corrigées
+    fit.spline <- fitSpline(inDat = Spatial_Corrected, 
+                            trait = paste0(trait_name, "_corr"),
+                            knots = knots,
+                            minNoTP = mintimepoints)
+    
+    # Extraire les tables de valeurs prédites et coefficients de splines
+    predDat_name <- paste0("predDat_", trait_name)
+    coefDat_name <- paste0("coefDat_", trait_name)
+    
+    assign(predDat_name, fit.spline$predDat)
+    assign(coefDat_name, fit.spline$coefDat)
+  } else {
+    cat("No model found for", trait_name, "\n")
+  }
+}
+```
+
+#### Plot the splines for a plant selection 
+
+```{r eval=FALSE, include=FALSE}
+for (trait_name in traits) {
+  plantSel <- S_timeseries[grepl('EPPN20_T', S_timeseries$Genotype), "Unit.ID", drop = TRUE]
+  plantSel <- as.character(plantSel)
+  
+  plot(fit.spline,
+       plotIds = plantSel,
+       plotType = "predictions",
+       main = paste("Predictions for", trait_name))
+  
+  plot(fit.spline,
+       plotIds = plantSel,
+       plotType = "derivatives",
+       main = paste("Derivatives for", trait_name))
+  
+  plot(fit.spline,
+       plotIds = plantSel,
+       plotType = "derivatives2",
+       main = paste("Second Derivatives for", trait_name))
+}
+```
+
+#### detectSerieOut
+
+
+```{r}
+thrCor <- c(0.9) # correlation threshold
+thrPca <- c(30) # pca angle threshold
+thrSlope <- c(0.7) # slope threshold
+
+for (trait_name in traits) {
+  Spatial_Corrected_name <- paste0("Spatial_Corrected_", trait_name)
+  predDat_name <- paste0("predDat_", trait_name)
+  coefDat_name <- paste0("coefDat_", trait_name)
+  
+  if (exists(Spatial_Corrected_name) && exists(predDat_name) && exists(coefDat_name)) {
+    Spatial_Corrected <- get(Spatial_Corrected_name)
+    predDat <- get(predDat_name)
+    coefDat <- get(coefDat_name)
+    
+    Series_test <- detectSerieOut(corrDat = Spatial_Corrected,
+                                  predDat = predDat,
+                                  coefDat = coefDat,
+                                  trait = paste0(trait_name, "_corr"),
+                                  thrCor = thrCor,
+                                  thrPca = thrPca,
+                                  thrSlope = thrSlope,
+                                  geno.decomp = "geno.decomp")
+    
+    plot(Series_test, genotypes = levels(factor(Series_test$genotype)))
+    
+    assign(paste0("Series_test_", trait_name), Series_test)
+
+    assign(paste0("Spatial_Corrected_Out_", trait_name), Spatial_Corrected)
+  } else {
+    cat("No corrected data or prediction data found for", trait_name, "\n")
+  }
+}
+```
+
+
+#### removeSerieOut
+
+```{r}
+for (trait_name in traits) {
+  # Nom de la variable pour les données corrigées
+  Spatial_Corrected_name <- paste0("Spatial_Corrected_", trait_name)
+  Series_test_name <- paste0("Series_test_", trait_name)
+  
+  # Extraire les données corrigées et les résultats des séries
+  if (exists(Spatial_Corrected_name) && exists(Series_test_name)) {
+    Spatial_Corrected <- get(Spatial_Corrected_name)
+    Series_test <- get(Series_test_name)
+    
+    # Supprimer les outliers de la série
+    Spatial_Corrected_Out <- removeSerieOut(dat = Spatial_Corrected, serieOut = Series_test)
+    
+    # Assigner le résultat à une nouvelle variable
+    assign(paste0("Spatial_Corrected_Out_", trait_name), Spatial_Corrected_Out)
+  } else {
+    cat("No corrected data or series test data found for", trait_name, "\n")
+  }
+}
+```
+
+
+```{r}
+for (trait_name in traits) {
+  Spatial_Corrected_Out_name <- paste0("Spatial_Corrected_Out_", trait_name)
+  
+  if (exists(Spatial_Corrected_Out_name)) {
+    Spatial_Corrected_Out <- get(Spatial_Corrected_Out_name)
+    output_file <- sprintf("%s/timeSeriesOutliers_%s.tsv", datadir, trait_name)
+    readr::write_tsv(Spatial_Corrected_Out, output_file)
+    
+    cat("Data written to:", output_file, "\n")
+  } else {
+    cat("No corrected data found for", trait_name, "\n")
+  }
+}
+```
+
+### 4. With the cleaned data, re-do the spatial correction
+
+This is used to compare the values before and after. 
+
+Need to write a for loop for all the variables. 
+
+#### For S_Height_cm
+
+```{r eval=FALSE, include=FALSE}
+trait_name <- "S_Height_cm"
+
+timePoint_S_2 <- createTimePoints(dat = Spatial_Corrected_Out_S_Height_cm,										
+                                  experimentName = "EPPN2020_clean",
+                                  genotype = "genotype",
+                                  timePoint = "timePoint",
+                                  plotId = "plotId",
+                                  rowNum = "rowId",
+                                  colNum = "colId")
+
+## Correct for spatial
+modTP_2 <- fitModels(TP = timePoint_S_2,												
+                           trait = trait_name,
+                           geno.decomp = c("geno.decomp"))
+## Extract corrected values
+Spatial_Corrected_2 <- getCorrected(modTP_2)
+
+#Check the values before and after:
+  
+h21<-plot(modTP, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+h22<-plot(modTP_2, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+grid.arrange(h21, h22,  nrow = 1) 
+
+#
+ed2<-plot(modTP_2,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+ed1<-plot(modTP,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+grid.arrange(ed1, ed2,  nrow = 1) 
+
+spatial_Corr <- 
+  inner_join(Spatial_Corrected_S_Height_cm[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             Spatial_Corrected_2[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             by = c("timeNumber","plotId") )
+
+
+col1 <- paste0(trait_name, "_corr.x")
+col2 <- paste0(trait_name, "_corr.y")
+ggplot(spatial_Corr, aes(x = .data[[col1]], y = .data[[col2]])) +
+  geom_point(size=3) +
+  geom_abline(slope=1, intercept = 0,col="red",lty=2) +
+  ylab("Outliers removed") + xlab("Outliers") + theme_light()
+
+
+```
+
+```{undefined eval=FALSE, include=FALSE}
+# fit Spline again
+fit.spline_2 <- fitSpline(inDat = Spatial_Corrected_2, 
+                                trait = paste0(trait_name, "_corr"),
+                                knots = 30,
+                                minNoTP = 9)
+```
+
+#### Estimation of parameter from time series
+
+```{undefined eval=FALSE, include=FALSE}
+param1bis <- estimateSplineParameters(x = fit.spline_2,
+                           estimate = "derivatives",
+                           what = "max")
+head(param1bis)
+```
+
+```{undefined eval=FALSE, include=FALSE}
+param1bis[,'genotype'] <- factor( param1bis[, 'genotype'], 
+                              levels = genotypes_list)
+
+# Visualize the variability 
+ggplot(param1bis,
+       aes(x = genotype, y = max_derivatives)) + 
+  geom_boxplot(na.rm = TRUE) +
+  ylab("Max growth rate") +
+  theme_classic()
+```
+
+#### For S_Area_cmsquared
+
+```{r eval=FALSE, include=FALSE}
+trait_name <- "S_Area_cmsquared"
+
+timePoint_S_2 <- createTimePoints(dat = Spatial_Corrected_Out_S_Area_cmsquared,										
+                                  experimentName = "EPPN2020_clean",
+                                  genotype = "genotype",
+                                  timePoint = "timePoint",
+                                  plotId = "plotId",
+                                  rowNum = "rowId",
+                                  colNum = "colId")
+
+## Correct for spatial
+modTP_2 <- fitModels(TP = timePoint_S_2,												
+                           trait = trait_name,
+                           geno.decomp = c("geno.decomp"))
+## Extract corrected values
+Spatial_Corrected_2 <- getCorrected(modTP_2)
+
+#Check the values before and after:
+  
+h21<-plot(modTP, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+h22<-plot(modTP_2, output = FALSE,
+          plotType = "herit",
+          yLim = c(0.4,1))
+
+grid.arrange(h21, h22,  nrow = 1) 
+
+#
+ed2<-plot(modTP_2,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+ed1<-plot(modTP,output = FALSE,
+          plotType = "effDim",
+          EDType = "ratio",
+          yLim = c(0,1))
+
+grid.arrange(ed1, ed2,  nrow = 1) 
+
+spatial_Corr <- 
+  inner_join(Spatial_Corrected_S_Area_cmsquared[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             Spatial_Corrected_2[,c("timeNumber","plotId",paste0(trait_name, "_corr"))], 
+             by = c("timeNumber","plotId") )
+
+
+col1 <- paste0(trait_name, "_corr.x")
+col2 <- paste0(trait_name, "_corr.y")
+ggplot(spatial_Corr, aes(x = .data[[col1]], y = .data[[col2]])) +
+  geom_point(size=3) +
+  geom_abline(slope=1, intercept = 0,col="red",lty=2) +
+  ylab("Outliers removed") + xlab("Outliers") + theme_light()
+
+
+```
+
+```{undefined eval=FALSE, include=FALSE}
+# fit Spline again
+fit.spline_2 <- fitSpline(inDat = Spatial_Corrected_2, 
+                                trait = paste0(trait_name, "_corr"),
+                                knots = 30,
+                                minNoTP = 9)
+```
+
+#### Estimation of parameter from time series
+
+```{undefined eval=FALSE, include=FALSE}
+param1bis <- estimateSplineParameters(x = fit.spline_2,
+                           estimate = "derivatives",
+                           what = "max")
+head(param1bis)
+```
+
+```{undefined eval=FALSE, include=FALSE}
+param1bis[,'genotype'] <- factor( param1bis[, 'genotype'], 
+                              levels = genotypes_list)
+
+# Visualize the variability 
+ggplot(param1bis,
+       aes(x = genotype, y = max_derivatives)) + 
+  geom_boxplot(na.rm = TRUE) +
+  ylab("Max growth rate of area") +
+  theme_classic()
+```
+

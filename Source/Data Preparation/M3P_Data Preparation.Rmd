@@ -1,0 +1,430 @@
+---
+title: "M3P Data Preparation"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Drive/M3P")
+```
+
+Set the right working directory.
+```{r}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Drive/M3P")
+```
+
+# Packages importation 
+
+```{r include=FALSE}
+rm(list = ls())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+library(purrr)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# 1. Data importation
+
+The first step in this data preparation process involves importing all the pertinent datasets listed in the Google Sheets "Variables template" document. Fist we find the files, then import them.
+
+```{r echo=FALSE}
+# List the files
+list.files()
+```
+
+
+```{r Data importation, echo=FALSE}
+data_pheno <- read.delim("multisensor.txt")
+data_imaging <- read.delim("img_extracted.txt")
+raw_imaging <- read.delim("img_raw.txt")
+data_environment <- read.delim("env_multisensor.txt")
+```
+
+We can extract the coordinates of each plant with the ISA_EPPN.xlsx dataset, using a made-up function "coordinates_isaTAB".
+
+```{r}
+# Get the coordinates
+isaTAB <- read_excel("ISA_EPPN2020_M3P.xlsx", sheet = "s_exp")
+coordinates <- coordinates_isaTAB(isaTAB)
+```
+
+### A. Datasets structures
+We can take a quick look at all the datasets.
+
+- coordinates
+- data_pheno
+- data_imaging
+- data_environment
+
+```{r Quick look at the datasets}
+head(coordinates)
+head(data_pheno)
+head(data_imaging)
+head(data_environment)
+```
+
+### B. Data manipulation
+
+This next step standardizes diverse datasets by renaming variables for consistency, converting data into appropriate units, adding necessary columns, and merging the datasets.
+
+
+```{r}
+################################################################################
+# COORDINATES
+################################################################################
+# Unit.ID 
+coordinates$Unit.ID <- seq_len(nrow(coordinates))
+# Reference for Sample.Name et Unit.ID
+reference <- coordinates[, c("Sample.Name", "Unit.ID")]
+## We can then copy dataset2$Unit.ID <- reference$Unit.ID[match(dataset2$Sample.Name, reference$Sample.Name)]
+
+# Genotype, soil 
+reference$Genotype <- isaTAB$`Source Name`
+reference$Soil <- isaTAB$`Factor Value[WaterTreatment]`
+
+################################################################################
+# DATA_PHENO
+################################################################################
+
+# Time, Date and Timestamp
+data_pheno$Timestamp <- as.POSIXct(data_pheno$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+data_pheno$Date <- as.Date(data_pheno$Timestamp, format = "%Y-%m-%d")
+data_pheno$Time <- sapply(strsplit(as.character(data_pheno$Timestamp), split = " "), '[', 2)
+
+# Name of the platform
+data_pheno$Platform <- "M3P"
+
+# Unit.ID
+data_pheno$Unit.ID2 <- reference$Unit.ID[match(data_pheno$Unit.ID, reference$Sample.Name)]
+data_pheno$Unit.ID <- data_pheno$Unit.ID2
+
+# Variables
+Leaf_number <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000005", ]
+Ligulated_leaf_number <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000006", ]
+Plant_emergence <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000007", ]
+DW_plant_g <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000008", ]
+DW_plant_g$Date <- as.Date("2020-04-19")
+Plant_transpiration <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000009", ]
+Daily_wu <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000010", ]
+Total_wu <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000011", ]
+Wue <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000012", ]
+Soil_water_potential <- data_pheno[data_pheno$variable.ID == "m3p:variable/pv000013", ]
+
+################################################################################
+# DATA_IMAGING
+################################################################################
+# Time, Date and Timestamp
+data_imaging$Timestamp <- as.POSIXct(data_imaging$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+data_imaging$Date <- as.Date(data_imaging$Timestamp, format = "%Y-%m-%d")
+data_imaging$Time <- sapply(strsplit(as.character(data_imaging$Timestamp), split = " "), '[', 2)
+
+# Name of the platform
+data_imaging$Platform <- "M3P"
+
+# Unit.ID
+data_imaging$Unit.ID <- reference$Unit.ID[match(data_imaging$Unit.ID, reference$Sample.Name)]
+
+# Rename the columns for the template
+data_imaging <- rename(data_imaging,
+                       S_Height_cm = Estimated_PlantHeight,
+                       S_Leaf_area_cm_squared = Estimated_PlantLeafArea,
+                       Plant_biomass_g = Estimated_PlantBiomass
+                       )
+```
+
+# 2. Data template
+
+### A. Data template: plant_info
+This dataset contains information about the plant: Unit.ID, genotype, replication, row and column location in the greenhouse, and soil treatment.
+
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(reference$Unit.ID),
+                 Genotype = factor(reference$Genotype),
+                 Soil = factor(reference$Soil),
+                 Replication = factor(coordinates$rep),
+                 Row = factor(coordinates$nrow),
+                 Column = factor(coordinates$ncol),
+                 Platform = "M3P"
+                 )
+```
+
+### B. Data template: endpoint
+This datasets contains information of the end of the experiment (variables at harvest).
+It is then linked by the Unit.ID to the plant_info data template.
+
+```{r Template endpoint, include=FALSE}
+endpoint <- data.frame(Unit.ID = as.factor(DW_plant_g$Unit.ID),
+                       Time = NA, 
+                       Date = date(DW_plant_g$Date),
+                       Timestamp = NA,
+                       
+                       DW_shoot_g = NA,
+                       FW_shoot_g = NA,
+                       DW_root_g = NA,
+                       FW_root_g = NA,
+                       Leaf_number= NA,
+                       Plant_height_cm = NA,
+                       DW_plant_g = as.numeric(DW_plant_g$Value),
+                       Root_length_cm = NA,
+                       Root_number = NA,
+                       Root_angle = NA,
+                       Total_wu = NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cmsquared = NA
+)
+endpoint <- left_join(endpoint, plant_info, by = "Unit.ID")
+```
+
+### C. Data template: timeseries
+This section in divided in three data templates: 
+
+- timeseries
+
+- S_timeseries (variables computed from sideview imaging or image processing)
+
+- T_timeseries (variables computed from topview imaging or image processing)
+
+The time interval between data timestamps varies in each platform.
+They are then linked by the Unit.ID to the plant_info data template. 
+
+
+```{r Template timeseries S_timeseries T_timeseries, include=FALSE}
+
+timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                         Time = data_imaging$Time,
+                         Date = as.Date(data_imaging$Date),
+                         Timestamp = data_imaging$Timestamp,
+                         
+                         Manual_Plant_height_cm = NA, 
+                         Leaf_number = NA,
+                         Wue = NA,
+                         Plant_biomass_g = as.numeric(data_imaging$Plant_biomass),
+                         Ligulated_leaf_number = NA,
+                         Plant_emergence = NA,
+                         Plant_transpiration = NA,
+                         Daily_wu = NA,
+                         Soil_water_potential = NA
+)
+timeseries <- left_join(timeseries, plant_info, by = "Unit.ID")
+
+timeseries_Water <- data.frame(Unit.ID = factor(Total_wu$Unit.ID),
+                               Time = NA,
+                               Date = as.Date(Total_wu$Date),
+                               Timestamp = NA,
+                               
+                               Wue = as.numeric(Wue$Value),
+                               Daily_wu = as.numeric(Daily_wu$Value),
+                               Total_wu = as.numeric(Total_wu$Value)
+)                              
+timeseries_Water <- left_join(timeseries_Water, plant_info, by = "Unit.ID")
+
+timeseries_Leaf_number <- data.frame(Unit.ID = factor(Leaf_number$Unit.ID),
+                                     Time = Leaf_number$Time,
+                                     Date = as.Date(Leaf_number$Date),
+                                     Timestamp = Leaf_number$Timestamp,
+                                     
+                                     Leaf_number = as.numeric(Leaf_number$Value)
+)
+timeseries_Leaf_number <- left_join(timeseries_Leaf_number, plant_info, by = "Unit.ID")
+                      
+
+timeseries_Ligulated_leaf_number <- data.frame(Unit.ID = factor(Ligulated_leaf_number$Unit.ID),
+                                     Time = Ligulated_leaf_number$Time,
+                                     Date = as.Date(Ligulated_leaf_number$Date),
+                                     Timestamp = Ligulated_leaf_number$Timestamp,
+                                     
+                                     Ligulated_leaf_number = as.numeric(Ligulated_leaf_number$Value)
+)
+timeseries_Ligulated_leaf_number <- left_join(timeseries_Ligulated_leaf_number, plant_info, by = "Unit.ID")
+
+
+timeseries_Plant_transpiration <- data.frame(Unit.ID = factor(Plant_transpiration$Unit.ID),
+                                     Time = Plant_transpiration$Time,
+                                     Date = as.Date(Plant_transpiration$Date),
+                                     Timestamp = Plant_transpiration$Timestamp,
+                                     
+                                     Plant_transpiration = as.numeric(Plant_transpiration$Value)
+)
+timeseries_Plant_transpiration <- left_join(timeseries_Plant_transpiration, plant_info, by = "Unit.ID")
+
+timeseries_Plant_emergence <- data.frame(Unit.ID = factor(Plant_emergence$Unit.ID),
+                                     Time = Plant_emergence$Time,
+                                     Date = as.Date(Plant_emergence$Date),
+                                     Timestamp = Plant_emergence$Timestamp,
+                                     
+                                     Plant_emergence = as.numeric(Plant_emergence$Value)
+)
+timeseries_Plant_emergence <- left_join(timeseries_Plant_emergence, plant_info, by = "Unit.ID")
+
+
+timeseries_Soil_water_potential <- data.frame(Unit.ID = factor(Soil_water_potential$Unit.ID),
+                                     Time = Soil_water_potential$Time,
+                                     Date = as.Date(Soil_water_potential$Date),
+                                     Timestamp = Soil_water_potential$Timestamp,
+                                     
+                                     Soil_water_potential = as.numeric(Soil_water_potential$Value)
+)
+timeseries_Soil_water_potential <- left_join(timeseries_Soil_water_potential, plant_info, by = "Unit.ID")
+
+
+
+S_timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                           Timestamp = data_imaging$Timestamp,
+                           Date = date(data_imaging$Date),
+                           Time = data_imaging$Time,
+                           
+                           S_Height_cm = as.numeric(data_imaging$S_Height_cm),
+                           S_Height_pixel = NA,
+                           S_Area_cmsquared = NA,
+                           S_Area_pixel = NA,
+                           S_Perimeter_cm = NA,
+                           S_Perimeter_pixel = NA,
+                           S_Convex_hull_area_cmsquared = NA,
+                           S_Solidity = NA,
+                           S_Compactness = NA,
+                           S_Width_cm = NA,
+                           S_Width_pixel = NA,
+                           S_Leaf_area_cmsquared = as.numeric(data_imaging$S_Leaf_area_cm_squared)
+)
+S_timeseries <- left_join(S_timeseries, plant_info, by = "Unit.ID")
+
+
+T_timeseries <- data.frame(Unit.ID = NA,
+                           Time = NA, 
+                           Date = NA,
+                           Timestamp = NA,
+                           T_Area_cm_squared = NA,
+                           T_Area_pixel = NA,
+                           T_Perimeter_cm = NA,
+                           T_Perimeter_pixel = NA,
+                           T_Convex_hull_area_cmsquared = NA,
+                           T_Solidity = NA,
+                           T_Compactness = NA,
+                           T_Roundness = NA,
+                           T_Roundness2 = NA,
+                           T_Isotropy = NA,
+                           T_Eccentricity = NA,
+                           T_Rms = NA,
+                           T_Sol = NA
+)
+T_timeseries <- left_join(T_timeseries, plant_info, by = "Unit.ID")
+
+```
+
+```{r}
+# Remove the unknown genotypes
+endpoint <- endpoint %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries <- timeseries %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Leaf_number <- timeseries_Leaf_number %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Ligulated_leaf_number <- timeseries_Ligulated_leaf_number %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Plant_emergence <- timeseries_Plant_emergence %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Plant_transpiration <- timeseries_Plant_transpiration %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Soil_water_potential <- timeseries_Soil_water_potential %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+timeseries_Water <- timeseries_Water %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+
+S_timeseries <- S_timeseries %>%
+  filter(!Genotype %in% c("DZPG91", "DZPG72", "DZPG", "DZPG23", "DZPG100", "DZPG93", "DZPG999", "DZPG96"))
+```
+
+
+### D. M3P data templates
+
+- plant_info
+- endpoint
+- timeseries
+- timeseries_Leaf_number, timeseries_Ligulated_leaf_number, timeseries_Plant_emergence, timeseries_Plant_transpiration, timeseries_Soil_water_potential, timeseries_Water
+- S_timeseries
+- T_timeseries
+
+```{r Data template, echo=FALSE}
+head(plant_info)
+head(endpoint)
+head(timeseries)
+head(timeseries_Ligulated_leaf_number)
+head(timeseries_Leaf_number)
+head(timeseries_Plant_emergence)
+head(timeseries_Plant_transpiration)
+head(timeseries_Soil_water_potential)
+head(timeseries_Water)
+head(S_timeseries)
+head(T_timeseries)
+```
+
+# 3. Export the data templates in .txt
+Stock the new data sets in a new folder.
+
+```{r Export}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/M3P")
+
+write.table(plant_info, file = "plant_info.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(endpoint, file = "endpoint.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries, file = "timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+write.table(timeseries_Leaf_number, file = "timeseries_Leaf_number.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries_Ligulated_leaf_number, file = "timeseries_Ligulated_leaf_number.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries_Plant_emergence, file = "timeseries_Plant_emergence.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries_Plant_transpiration, file = "timeseries_Plant_transpiration.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries_Soil_water_potential, file = "timeseries_Soil_water_potential.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries_Water, file = "timeseries_Water.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+write.table(S_timeseries, file = "S_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(T_timeseries, file = "T_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

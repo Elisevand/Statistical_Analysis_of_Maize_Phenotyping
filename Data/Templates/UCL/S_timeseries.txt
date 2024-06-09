@@ -1,0 +1,2 @@
+Unit.ID	Timestamp	Date	Time	S_Height_cm	S_Height_pixel	S_Area_cmsquared	S_Area_pixel	S_Perimeter_cm	S_Perimeter_pixel	S_Convex_hull_area_cmsquared	S_Solidity	S_Compactness	S_Width_cm	S_Width_pixel	S_Leaf_area_cmsquared	Genotype	Soil	Replication	Row	Column	Platform
+NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA

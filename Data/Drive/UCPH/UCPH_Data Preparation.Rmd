@@ -1,0 +1,378 @@
+---
+title: "UCPH_Data Preparation"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Packages importation 
+
+```{r packages importation, include=FALSE}
+rm(list = ls())
+setwd(getwd())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# 1. Data importation
+
+The first step in this data preparation process involves importing all the pertinent datasets listed in the Google Sheets "Variables template" document. Fist we find the files, then import them.
+
+```{r Data files, echo=FALSE}
+# List the files
+list.files()
+```
+
+
+```{r Data importation, echo=FALSE}
+
+data_pheno <- read_excel("EPPN_Biomass_PhenoLab.xlsx", skip = 1)
+data_pheno <- data_pheno[data_pheno$Fixture_number <= 108, ] # The 109etc are not part of the experiment
+
+data_imaging <- read_excel("Cross Platform_Automatic_Height.xlsx")
+data_imaging <- data_imaging[data_imaging$`Fixture ID:` <= 108, ] # The 109etc are not part of the experiment
+
+#data_environment <- read.delim("2020_NaPPI_env_multisensor.txt")
+```
+
+We can extract the coordinates of each plant with the ISA_EPPN.xlsx dataset, using a made-up function "coordinates_isaTAB".
+For UCPH, the coordinates are not in the ISA_EPPN dataset. 
+
+```{r}
+design <- read.csv("DesignDIGGER_PhenoLab_JointPf.csv")
+```
+
+### A. Datasets structures
+We can take a quick look at all the datasets.
+
+- design
+- data_pheno
+- data_imaging
+
+```{r Quick look at the datasets}
+head(design)
+head(data_pheno)
+head(data_imaging)
+#head(data_environment)
+```
+
+### B. Data manipulation
+
+This next step standardizes diverse datasets by renaming variables for consistency, converting data into appropriate units, adding necessary columns, and merging the datasets.
+
+
+```{r}
+################################################################################
+# DESIGN
+################################################################################
+# Unit.ID 
+design <- rename(design,
+                 Unit.ID = UNIT,
+                 nrow = ROW,
+                 ncol = RANGE,
+                 rep = REP,
+                 Soil = Substrate)
+
+################################################################################
+# DATA_PHENO
+################################################################################
+# Time, Date and Timestamp
+data_pheno$Date <- as.Date("2021-06-28")
+
+# Name of the platform
+data_pheno$Platform <- "UCPH"
+
+# Rename the columns for the template
+data_pheno <- rename(data_pheno,
+                     Unit.ID = Fixture_number,
+                     DW_shoot_g = `DW_shoot(g)`,
+                     DW_root_g = `DW_root(g)`
+                     )
+
+################################################################################
+# DATA_IMAGING 
+################################################################################
+# Time, Date and Timestamp
+data_imaging$Timestamp <- data_imaging$`Date and Time`
+
+data_imaging$Date <- sapply(strsplit(as.character(data_imaging$Timestamp), split = " "), '[', 1)
+data_imaging$Time <- sapply(strsplit(as.character(data_imaging$Timestamp), split = " "), '[', 2)
+
+data_imaging <- subset(data_imaging, Date >= "2021-06-13") # The plants were put in the platform on the 13rd of june
+
+
+
+# Name of the platform
+data_imaging$Platform <- "UCPH"
+
+# Rename the columns for the template
+data_imaging <- rename(data_imaging,
+                       Unit.ID = `Fixture ID:`,
+                       Plant_height_mm = `Measurement:`
+                           )
+
+
+################################################################################
+# DATA_ENVIRONMENT
+################################################################################
+#head(data_environment)
+# TO DO
+
+
+```
+
+#### Camera angles
+No camera angles for the UCPH platform.
+
+```{r eval=FALSE, include=FALSE}
+
+# Data frame containing the results
+data_imaging_2 <- data.frame()
+
+for (i in seq(1, nrow(data_imaging), by = 3)) {
+  if (i + 1 <= nrow(data_imaging)) {
+    row1 <- data_imaging[i, ]
+    row2 <- data_imaging[i + 1, ]
+    row3 <- data_imaging[i + 2, ]
+    
+    # Compute the mean or the maximum of the 3 camera angles values
+    mean_and_max_row <- data.frame(
+      Date = row3$Date, # We keep the important columns
+      Time = row3$Time, # We keep the important columns
+      Unit.ID = row3$Unit.ID, # We keep the important columns
+      Timestamp = row3$Timestamp, # We keep the important columns
+      Platform = row3$Platform, # We keep the important columns
+      
+      S_Area_mm_squared = max(c(as.numeric(row1$S_Area_mm_squared), as.numeric(row2$S_Area_mm_squared), as.numeric(row3$S_Area_mm_squared))), 
+      S_Area_pixel = max(c(as.numeric(row1$S_Area_pixel), as.numeric(row2$S_Area_pixel), as.numeric(row3$S_Area_pixel))),
+      
+      S_Perimeter_mm = max(c(as.numeric(row1$S_Perimeter_mm), as.numeric(row2$S_Perimeter_mm), as.numeric(row3$S_Perimeter_mm))),
+      S_Perimeter_pixel = max(c(as.numeric(row1$S_Perimeter_pixel), as.numeric(row2$S_Perimeter_pixel), as.numeric(row3$S_Perimeter_pixel))),
+      
+      
+      S_Compactness = max(c(as.numeric(row1$S_Compactness), as.numeric(row2$S_Compactness), as.numeric(row3$S_Compactness))),
+      
+      S_Width_mm = max(c(as.numeric(row1$S_Width_mm), as.numeric(row2$S_Width_mm), as.numeric(row3$S_Width_mm))),
+      S_Width_pixel = max(c(as.numeric(row1$S_Width_pixel), as.numeric(row2$S_Width_pixel), as.numeric(row3$S_Width_pixel))),
+      
+      
+      S_Height_mm = mean(c(as.numeric(row1$S_Height_mm), as.numeric(row2$S_Height_mm), as.numeric(row3$S_Height_mm))),
+      S_Height_pixel = mean(c(as.numeric(row1$S_Height_pixel), as.numeric(row2$S_Height_pixel), as.numeric(row3$S_Height_pixel)))
+    )
+    
+    # Ajouter les résultats au dataframe final
+    data_imaging_2 <- rbind(data_imaging_2, mean_and_max_row)
+  }
+}
+
+# Afficher le dataframe final
+print(data_imaging_2)
+
+```
+
+### C. Unit conversions
+The data template is only in cm, cm² and g. This step converts the data in the right units.
+
+For the UCPH platform, one variables is in mm.
+
+```{r}
+data_imaging$S_Height_cm <- 0.01 * data_imaging$Plant_height_mm
+```
+
+# 2. Data template
+
+### A. Data template: plant_info
+This dataset contains information about the plant: Unit.ID, genotype, replication, row and column location in the greenhouse, and soil treatment.
+
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(design$Unit.ID),
+                 Genotype = factor(design$Genotype),
+                 Soil = factor(design$Soil),
+                 Replication = factor(design$rep),
+                 Row = factor(design$nrow),
+                 Column = factor(design$ncol),
+                 Platform = "UCPH"
+                 )
+```
+
+### B. Data template: endpoint
+This datasets contains information of the end of the experiment (variables at harvest).
+It is then linked by the Unit.ID to the plant_info data template.
+
+```{r Template endpoint, include=FALSE}
+endpoint <- data.frame(Unit.ID = as.factor(data_pheno$Unit.ID),
+                       Time = NA, 
+                       Date = date(data_pheno$Date),
+                       Timestamp = NA,
+                       
+                       DW_shoot_g = as.numeric(data_pheno$DW_shoot_g),
+                       FW_shoot_g = NA,
+                       DW_root_g = as.numeric(data_pheno$DW_root_g),
+                       FW_root_g = NA,
+                       Leaf_number= NA,
+                       Plant_height_cm = NA,
+                       DW_plant_g = NA,
+                       Root_length_cm = NA,
+                       Root_number = NA,
+                       Root_angle = NA,
+                       Total_wu = NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cmsquared = NA
+)
+endpoint <- left_join(endpoint, plant_info, by = "Unit.ID")
+```
+
+### C. Data template: timeseries
+This section in divided in three data templates: 
+- timeseries
+- S_timeseries (variables computed from sideview imaging or image processing)
+- T_timeseries (variables computed from topview imaging or image processing)
+The time interval between data timestamps varies in each platform.
+They are then linked by the Unit.ID to the plant_info data template. 
+
+
+```{r Template timeseries S_timeseries T_timeseries, include=FALSE}
+
+timeseries <- data.frame(Unit.ID = NA,
+                         Time = NA,
+                         Date = NA,
+                         Timestamp = NA,
+                         
+                         Manual_Plant_height_cm = NA, 
+                         Leaf_number = NA,
+                         Wue = NA,
+                         Plant_biomass = NA,
+                         Ligulated_leaf_number = NA,
+                         Plant_emergence = NA,
+                         Plant_transpiration = NA,
+                         Daily_wu = NA,
+                         Soil_water_potential = NA
+)
+timeseries <- left_join(timeseries, plant_info, by = "Unit.ID")
+                      
+
+S_timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                           Timestamp = data_imaging$Timestamp,
+                           Date = date(data_imaging$Date),
+                           Time = data_imaging$Time,
+                           
+                           S_Height_cm = as.numeric(data_imaging$S_Height_cm),
+                           S_Height_pixel = NA,
+                           S_Area_cmsquared = NA,
+                           S_Area_pixel = NA,
+                           S_Perimeter_cm = NA,
+                           S_Perimeter_pixel = NA,
+                           S_Convex_hull_area_cmsquared = NA,
+                           S_Solidity = NA,
+                           S_Compactness = NA,
+                           S_Width_cm = NA,
+                           S_Width_pixel = NA,
+                           S_Leaf_area_cmsquared = NA
+)
+S_timeseries <- left_join(S_timeseries, plant_info, by = "Unit.ID")
+
+
+T_timeseries <- data.frame(Unit.ID = NA,
+                           Time = NA, 
+                           Date = NA,
+                           Timestamp = NA,
+                           T_Area_cm_squared = NA,
+                           T_Area_pixel = NA,
+                           T_Perimeter_cm = NA,
+                           T_Perimeter_pixel = NA,
+                           T_Convex_hull_area_cmsquared = NA,
+                           T_Solidity = NA,
+                           T_Compactness = NA,
+                           T_Roundness = NA,
+                           T_Roundness2 = NA,
+                           T_Isotropy = NA,
+                           T_Eccentricity = NA,
+                           T_Rms = NA,
+                           T_Sol = NA
+)
+T_timeseries <- left_join(T_timeseries, plant_info, by = "Unit.ID")
+
+```
+
+### D. NaPPI data templates
+
+- plant_info
+- endpoint
+- timeseries
+- S_timeseries
+- T_timeseries
+
+```{r Data template, echo=FALSE}
+head(plant_info)
+head(endpoint)
+head(timeseries)
+head(S_timeseries)
+head(T_timeseries)
+```
+
+# 3. Export the data templates in .txt
+Stock the new data sets in a new folder.
+
+```{r Export}
+folder_path <- "UCPH_Template"
+
+file_path <- file.path(folder_path, "plant_info.txt")
+write.table(plant_info, file = file_path, sep = "\t", row.names = FALSE, quote = FALSE)
+
+file_path <- file.path(folder_path, "endpoint.txt")
+write.table(endpoint, file = file_path, sep = "\t", row.names = FALSE, quote = FALSE)
+
+file_path <- file.path(folder_path, "timeseries.txt")
+write.table(timeseries, file = file_path, sep = "\t", row.names = FALSE, quote = FALSE)
+
+file_path <- file.path(folder_path, "S_timeseries.txt")
+write.table(S_timeseries, file = file_path, sep = "\t", row.names = FALSE, quote = FALSE)
+
+file_path <- file.path(folder_path, "T_timeseries.txt")
+write.table(T_timeseries, file = file_path, sep = "\t", row.names = FALSE, quote = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

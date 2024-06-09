@@ -1,0 +1,311 @@
+---
+title: "FZJ Data Preparation"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Drive/FZJ")
+```
+
+Set the right working directory.
+```{r}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Drive/FZJ")
+```
+
+# Packages importation 
+
+```{r include=FALSE}
+rm(list = ls())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+library(purrr)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# 1. Data importation
+
+The first step in this data preparation process involves importing all the pertinent datasets listed in the Google Sheets "Variables template" document. Fist we find the files, then import them.
+
+```{r echo=FALSE}
+# List the files
+list.files()
+```
+
+
+```{r Data importation, echo=FALSE}
+data <- read.delim("multisensor.txt")
+data_environment <- read.delim("env_multisensor.txt")
+```
+
+We can extract the coordinates of each plant with the ISA_EPPN.xlsx dataset, using a made-up function "coordinates_isaTAB".
+
+```{r}
+# Get the coordinates
+isaTAB <- read_excel("ISA_EPPN2020_FZJ.xlsx", sheet = "s_exp")
+coordinates <- coordinates_isaTAB(isaTAB)
+```
+
+### A. Datasets structures
+We can take a quick look at all the datasets.
+
+- coordinates
+- data
+- data_environment
+
+```{r Quick look at the datasets}
+head(coordinates)
+head(data)
+head(data_environment)
+```
+
+### B. Data manipulation
+
+This next step standardizes diverse datasets by renaming variables for consistency, converting data into appropriate units, adding necessary columns, and merging the datasets.
+
+
+```{r}
+################################################################################
+# COORDINATES
+################################################################################
+# Unit.ID 
+coordinates$Unit.ID <- seq_len(nrow(coordinates))
+# Reference for Sample.Name et Unit.ID
+reference <- coordinates[, c("Sample.Name", "Unit.ID")]
+## We can then copy dataset2$Unit.ID <- reference$Unit.ID[match(dataset2$Sample.Name, reference$Sample.Name)]
+# Genotype
+reference$Genotype <- isaTAB$`Source Name`
+
+################################################################################
+# DATA
+################################################################################
+# separate for endpoint and timeseries
+FW_shoot_g <- data[data$Variable.ID == "Shoot_fresh_weight", ]
+FW_shoot_g$Date <- as.Date("2019-11-11")
+FW_shoot_g$unit <- reference$Unit.ID[match(FW_shoot_g$Unit.ID, reference$Sample.Name)]
+FW_shoot_g$Unit.ID <- FW_shoot_g$unit
+
+DW_shoot_g <- data[data$Variable.ID == "Shoot_dry_weight", ]
+DW_shoot_g$Date <- as.Date("2019-11-11")
+DW_shoot_g$unit <- reference$Unit.ID[match(DW_shoot_g$Unit.ID, reference$Sample.Name)]
+DW_shoot_g$Unit.ID <- DW_shoot_g$unit
+
+DW_root_g <- data[data$Variable.ID == "Root_dry_weight", ]
+DW_root_g$Date <- as.Date("2019-11-11")
+DW_root_g$unit <- reference$Unit.ID[match(DW_root_g$Unit.ID, reference$Sample.Name)]
+DW_root_g$Unit.ID <- DW_root_g$unit
+
+Root_length_cm <- data[data$Variable.ID == "Total_root_length_scan", ]
+Root_length_cm$Date <- as.Date("2019-11-11")
+Root_length_cm$unit <- reference$Unit.ID[match(Root_length_cm$Unit.ID, reference$Sample.Name)]
+Root_length_cm$Unit.ID <- Root_length_cm$unit
+
+Root_angle <- data[data$Variable.ID == "Root_angle", ]
+Root_angle$Date <- as.Date("2019-11-11")
+Root_angle$unit <- reference$Unit.ID[match(Root_angle$Unit.ID, reference$Sample.Name)]
+Root_angle$Unit.ID <- Root_angle$unit
+
+Root_number <- data[data$Variable.ID == "Root_number", ]
+Root_number$Date <- as.Date("2019-11-11")
+Root_number$unit <- reference$Unit.ID[match(Root_number$Unit.ID, reference$Sample.Name)]
+Root_number$Unit.ID <- Root_number$unit
+
+
+Leaf_number <- data[data$Variable.ID == "Leaf_number", ]
+Leaf_number$Date <- gsub("_", "-", Leaf_number$Timestamp)
+Leaf_number$Date <- as.Date(Leaf_number$Date)
+Leaf_number$unit <- reference$Unit.ID[match(Leaf_number$Unit.ID, reference$Sample.Name)]
+Leaf_number$Unit.ID <- Leaf_number$unit
+
+Plant_height_cm <- data[data$Variable.ID == "Plant_height", ]
+Plant_height_cm$Date <- gsub("_", "-", Plant_height_cm$Timestamp)
+Plant_height_cm$Date <- as.Date(Plant_height_cm$Date)
+Plant_height_cm$unit <- reference$Unit.ID[match(Plant_height_cm$Unit.ID, reference$Sample.Name)]
+Plant_height_cm$Unit.ID <- Plant_height_cm$unit
+```
+
+
+# 2. Data template
+
+### A. Data template: plant_info
+This dataset contains information about the plant: Unit.ID, genotype, replication, row and column location in the greenhouse, and soil treatment.
+
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(coordinates$Unit.ID),
+                 Genotype = factor(reference$Genotype),
+                 Soil = NA,
+                 Replication = factor(coordinates$rep),
+                 Row = factor(coordinates$nrow),
+                 Column = factor(coordinates$ncol),
+                 Platform = "FZJ"
+                 )
+```
+
+### B. Data template: endpoint
+This datasets contains information of the end of the experiment (variables at harvest).
+It is then linked by the Unit.ID to the plant_info data template.
+
+```{r Template endpoint, include=FALSE}
+endpoint <- data.frame(Unit.ID = factor(DW_root_g$Unit.ID),
+                       Time = NA, 
+                       Date = date(DW_root_g$Date),
+                       Timestamp = NA,
+                       
+                       DW_shoot_g = as.numeric(DW_shoot_g$Value),
+                       FW_shoot_g = as.numeric(FW_shoot_g$Value),
+                       DW_root_g = as.numeric(DW_root_g$Value),
+                       FW_root_g = NA,
+                       Leaf_number= NA,
+                       Plant_height_cm = NA,
+                       DW_plant_g = NA,
+                       Root_length_cm = as.numeric(Root_length_cm$Value),
+                       Root_number = as.numeric(Root_number$Value),
+                       Root_angle = as.numeric(Root_angle$Value),
+                       Total_wu = NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cmsquared = NA
+)
+endpoint <- left_join(endpoint, plant_info, by = "Unit.ID")
+```
+
+### C. Data template: timeseries
+This section in divided in three data templates: 
+
+- timeseries
+
+- S_timeseries (variables computed from sideview imaging or image processing)
+
+- T_timeseries (variables computed from topview imaging or image processing)
+
+The time interval between data timestamps varies in each platform.
+They are then linked by the Unit.ID to the plant_info data template. 
+
+
+```{r Template timeseries S_timeseries T_timeseries, include=FALSE}
+
+timeseries <- data.frame(Unit.ID = factor(Plant_height_cm$Unit.ID),
+                         Time = NA,
+                         Date = date(Plant_height_cm$Date),
+                         Timestamp = NA,
+                         
+                         Manual_Plant_height_cm = as.numeric(Plant_height_cm$Value), 
+                         Leaf_number = as.numeric(Leaf_number$Value),
+                         Wue = NA,
+                         Plant_biomass = NA,
+                         Ligulated_leaf_number = NA,
+                         Plant_emergence = NA,
+                         Plant_transpiration = NA,
+                         Daily_wu = NA,
+                         Soil_water_potential = NA
+)
+timeseries <- left_join(timeseries, plant_info, by = "Unit.ID")
+                      
+
+S_timeseries <- data.frame(Unit.ID = NA,
+                           Timestamp = NA,
+                           Date = NA,
+                           Time = NA,
+                           
+                           S_Height_cm = NA,
+                           S_Height_pixel = NA,
+                           S_Area_cmsquared = NA,
+                           S_Area_pixel = NA,
+                           S_Perimeter_cm = NA,
+                           S_Perimeter_pixel = NA,
+                           S_Convex_hull_area_cmsquared = NA,
+                           S_Solidity = NA,
+                           S_Compactness = NA,
+                           S_Width_cm = NA,
+                           S_Width_pixel = NA,
+                           S_Leaf_area_cmsquared = NA
+)
+S_timeseries <- left_join(S_timeseries, plant_info, by = "Unit.ID")
+
+
+T_timeseries <- data.frame(Unit.ID = NA,
+                           Time = NA, 
+                           Date = NA,
+                           Timestamp = NA,
+                           T_Area_cm_squared = NA,
+                           T_Area_pixel = NA,
+                           T_Perimeter_cm = NA,
+                           T_Perimeter_pixel = NA,
+                           T_Convex_hull_area_cmsquared = NA,
+                           T_Solidity = NA,
+                           T_Compactness = NA,
+                           T_Roundness = NA,
+                           T_Roundness2 = NA,
+                           T_Isotropy = NA,
+                           T_Eccentricity = NA,
+                           T_Rms = NA,
+                           T_Sol = NA
+)
+T_timeseries <- left_join(T_timeseries, plant_info, by = "Unit.ID")
+
+```
+
+### D. FZJ data templates
+
+- plant_info
+- endpoint
+- timeseries
+- S_timeseries
+- T_timeseries
+
+```{r Data template, echo=FALSE}
+head(plant_info)
+head(endpoint)
+head(timeseries)
+head(S_timeseries)
+head(T_timeseries)
+```
+
+# 3. Export the data templates in .txt
+Stock the new data sets in a new folder.
+
+```{r Export}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/FZJ")
+
+write.table(plant_info, file = "plant_info.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(endpoint, file = "endpoint.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries, file = "timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(S_timeseries, file = "S_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(T_timeseries, file = "T_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,2 @@
+Unit.ID	Time	Date	Timestamp	Manual_Plant_height_cm	Leaf_number	Wue	Plant_biomass	Ligulated_leaf_number	Plant_emergence	Plant_transpiration	Daily_wu	Soil_water_potential	Genotype	Soil	Replication	Row	Column	Platform
+NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA

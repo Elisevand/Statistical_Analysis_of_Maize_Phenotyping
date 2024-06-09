@@ -1,0 +1,324 @@
+---
+title: "ALSIA Data Preparation"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Drive/ALSIA")
+```
+
+Set the right working directory.
+```{r}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Drive/ALSIA")
+```
+
+# Packages importation 
+
+```{r include=FALSE}
+rm(list = ls())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+library(purrr)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# 1. Data importation
+
+The first step in this data preparation process involves importing all the pertinent datasets listed in the Google Sheets "Variables template" document. Fist we find the files, then import them.
+
+```{r echo=FALSE}
+# List the files
+list.files()
+```
+
+
+```{r Data importation, echo=FALSE}
+data_pheno <- read.delim("raw_destructive.txt")
+data_imaging <- read.delim("extracted_imaging.txt")
+data_environment <- read.delim("filtered_enviromental.txt")
+```
+
+We can extract the coordinates of each plant with the ISA_EPPN.xlsx dataset, using a made-up function "coordinates_isaTAB".
+
+```{r}
+# Get the coordinates
+isaTAB <- read_excel("ISA_EPPN2020_ALSIA.xlsx", sheet = "s_exp")
+coordinates <- coordinates_isaTAB(isaTAB)
+```
+
+### A. Datasets structures
+We can take a quick look at all the datasets.
+
+- coordinates
+- data_pheno
+- data_imaging
+- data_environment
+
+```{r Quick look at the datasets}
+head(coordinates)
+head(data)
+head(data_imaging)
+head(data_environment)
+```
+
+### B. Data manipulation
+
+This next step standardizes diverse datasets by renaming variables for consistency, converting data into appropriate units, adding necessary columns, and merging the datasets.
+
+
+```{r}
+################################################################################
+# COORDINATES
+################################################################################
+# Unit.ID 
+coordinates$Unit.ID <- seq_len(nrow(coordinates))
+# Reference for Sample.Name et Unit.ID
+reference <- coordinates[, c("Sample.Name", "Unit.ID")]
+## We can then copy dataset2$Unit.ID <- reference$Unit.ID[match(dataset2$Sample.Name, reference$Sample.Name)]
+
+################################################################################
+# DATA_PHENO
+################################################################################
+
+# Time, Date and Timestamp
+data_pheno$Timestamp <- as.POSIXct(data_pheno$timestamp, format = "%Y-%m-%d %H:%M:%S")
+data_pheno$Date <- as.Date(data_pheno$date, format = "%Y-%m-%d")
+data_pheno$Time <- sapply(strsplit(as.character(data_pheno$timestamp), split = " "), '[', 2)
+
+# Name of the platform
+data_pheno$Platform <- "ALSIA"
+
+# Unit.ID
+data_pheno$Unit.ID <- reference$Unit.ID[match(data_pheno$plantbarcode, reference$Sample.Name)]
+
+# Rename the columns for the template
+data_pheno <- rename(data_pheno,
+                     Genotype = genotype,
+                     Replication = replica,
+                     FW_shoot_g = fresh_weight,
+                     Plant_height_cm = manual_plant_height
+                     )
+
+################################################################################
+# DATA_IMAGING
+################################################################################
+head(data_imaging)
+
+# Time, Date and Timestamp
+data_imaging$Timestamp <- as.POSIXct(data_imaging$timestamp, format = "%Y-%m-%d %H:%M:%S")
+data_imaging$Date <- as.Date(data_imaging$date, format = "%Y-%m-%d")
+data_imaging$Time <- sapply(strsplit(as.character(data_imaging$timestamp), split = " "), '[', 2)
+
+# Name of the platform
+data_imaging$Platform <- "ALSIA"
+
+# Unit.ID
+data_imaging$Unit.ID <- reference$Unit.ID[match(data_imaging$plantbarcode, reference$Sample.Name)]
+
+# Rename the columns for the template
+data_imaging <- rename(data_imaging,
+                       Genotype = genotype,
+                       Replication = replica,
+                       S_Area_cmsquared = area.S,
+                       T_Area_cmsquared = area.T,
+                       S_Convex_hull_area_cmsquared = convex_hull_area.S,
+                       T_Convex_hull_area_cmsquared = convex_hull_area.T,
+                       S_Solidity = solidity.S,
+                       T_Solidity = solidity.T,
+                       S_Height_cm = height_above_reference.S,
+                       S_Leaf_area_cmsquared = projected_shoot_area,
+                       Wue = wue
+                       )
+```
+
+
+# 2. Data template
+
+### A. Data template: plant_info
+This dataset contains information about the plant: Unit.ID, genotype, replication, row and column location in the greenhouse, and soil treatment.
+
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(data_pheno$Unit.ID),
+                 Genotype = factor(data_pheno$Genotype),
+                 Soil = NA,
+                 Replication = factor(data_pheno$Replication),
+                 Row = factor(data_pheno$Row),
+                 Column = factor(data_pheno$Column),
+                 Platform = factor(data_pheno$Platform)
+                 )
+```
+
+### B. Data template: endpoint
+This datasets contains information of the end of the experiment (variables at harvest).
+It is then linked by the Unit.ID to the plant_info data template.
+
+```{r Template endpoint, include=FALSE}
+endpoint <- data.frame(Unit.ID = as.factor(data_pheno$Unit.ID),
+                       Time = data_pheno$Time, 
+                       Date = as.Date(data_pheno$Date),
+                       Timestamp = data_pheno$Timestamp,
+                       
+                       DW_shoot_g = NA,
+                       FW_shoot_g = as.numeric(data_pheno$FW_shoot_g),
+                       DW_root_g = NA,
+                       FW_root_g = NA,
+                       Leaf_number= NA,
+                       Plant_height_cm = as.numeric(data_pheno$Plant_height_cm),
+                       DW_plant_g = NA,
+                       Root_length_cm = NA,
+                       Root_number = NA,
+                       Root_angle = NA,
+                       Total_wu = NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cmsquared = NA
+)
+endpoint <- left_join(endpoint, plant_info, by = "Unit.ID")
+```
+
+### C. Data template: timeseries
+This section in divided in three data templates: 
+
+- timeseries
+
+- S_timeseries (variables computed from sideview imaging or image processing)
+
+- T_timeseries (variables computed from topview imaging or image processing)
+
+The time interval between data timestamps varies in each platform.
+They are then linked by the Unit.ID to the plant_info data template. 
+
+
+```{r Template timeseries S_timeseries T_timeseries, include=FALSE}
+
+timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                         Time = data_imaging$Time,
+                         Date = as.Date(data_imaging$Date),
+                         Timestamp = data_imaging$Timestamp,
+                         
+                         Manual_Plant_height_cm = NA, 
+                         Leaf_number = NA,
+                         Wue = as.numeric(data_imaging$Wue),
+                         Plant_biomass = NA,
+                         Ligulated_leaf_number = NA,
+                         Plant_emergence = NA,
+                         Plant_transpiration = NA,
+                         Daily_wu = NA,
+                         Soil_water_potential = NA
+)
+timeseries <- left_join(timeseries, plant_info, by = "Unit.ID")
+                      
+
+S_timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                           Timestamp = data_imaging$Timestamp,
+                           Date = date(data_imaging$Date),
+                           Time = data_imaging$Time,
+                           
+                           S_Height_cm = as.numeric(data_imaging$S_Height_cm),
+                           S_Height_pixel = NA,
+                           S_Area_cmsquared = as.numeric(data_imaging$S_Area_cmsquared),
+                           S_Area_pixel = NA,
+                           S_Perimeter_cm = NA,
+                           S_Perimeter_pixel = NA,
+                           S_Convex_hull_area_cmsquared = as.numeric(data_imaging$S_Convex_hull_area_cmsquared),
+                           S_Solidity = as.numeric(data_imaging$S_Solidity),
+                           S_Compactness = NA,
+                           S_Width_cm = NA,
+                           S_Width_pixel = NA,
+                           S_Leaf_area_cmsquared = as.numeric(data_imaging$S_Leaf_area_cmsquared)
+)
+S_timeseries <- left_join(S_timeseries, plant_info, by = "Unit.ID")
+
+
+T_timeseries <- data.frame(Unit.ID = factor(data_imaging$Unit.ID),
+                           Timestamp = data_imaging$Timestamp,
+                           Date = date(data_imaging$Date),
+                           Time = data_imaging$Time,
+                           
+                           T_Area_cmsquared = as.numeric(data_imaging$T_Area_cmsquared),
+                           T_Area_pixel = NA,
+                           T_Perimeter_cm = NA,
+                           T_Perimeter_pixel = NA,
+                           T_Convex_hull_area_cmsquared = as.numeric(data_imaging$T_Convex_hull_area_cmsquared),
+                           T_Solidity = as.numeric(data_imaging$T_Solidity),
+                           T_Compactness = NA,
+                           T_Roundness = NA,
+                           T_Roundness2 = NA,
+                           T_Isotropy = NA,
+                           T_Eccentricity = NA,
+                           T_Rms = NA,
+                           T_Sol = NA
+)
+T_timeseries <- left_join(T_timeseries, plant_info, by = "Unit.ID")
+
+```
+
+### D. ALSIA data templates
+
+- plant_info
+- endpoint
+- timeseries
+- S_timeseries
+
+```{r Data template, echo=FALSE}
+head(plant_info)
+head(endpoint)
+head(timeseries)
+head(S_timeseries)
+```
+
+# 3. Export the data templates in .txt
+Stock the new data sets in a new folder.
+
+```{r Export}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/ALSIA")
+
+write.table(plant_info, file = "plant_info.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(endpoint, file = "endpoint.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries, file = "timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(S_timeseries, file = "S_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(T_timeseries, file = "T_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

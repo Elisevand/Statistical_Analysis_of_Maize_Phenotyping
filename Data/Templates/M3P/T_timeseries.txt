@@ -1,0 +1,2 @@
+Unit.ID	Time	Date	Timestamp	T_Area_cm_squared	T_Area_pixel	T_Perimeter_cm	T_Perimeter_pixel	T_Convex_hull_area_cmsquared	T_Solidity	T_Compactness	T_Roundness	T_Roundness2	T_Isotropy	T_Eccentricity	T_Rms	T_Sol	Genotype	Soil	Replication	Row	Column	Platform
+NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA

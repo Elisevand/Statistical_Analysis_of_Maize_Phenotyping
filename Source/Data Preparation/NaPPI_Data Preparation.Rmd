@@ -1,0 +1,403 @@
+---
+title: "NaPPI Data Preparation"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Drive/NaPPI")
+```
+
+Set the right working directory.
+```{r}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Drive/NaPPI")
+```
+
+# Packages importation 
+
+```{r include=FALSE}
+rm(list = ls())
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+library(purrr)
+# Import functions
+source("~/Mémoire/functions.R")
+```
+
+# 1. Data importation
+
+The first step in this data preparation process involves importing all the pertinent datasets listed in the Google Sheets "Variables template" document. Fist we find the files, then import them.
+
+```{r echo=FALSE}
+# List the files
+list.files()
+```
+
+
+```{r Data importation, echo=FALSE}
+data_FW <- read.delim2("2020_NaPPI_FW.txt")
+data_DM <- read.delim2("2020_NaPPI_DM.txt")
+data_imaging <- read_excel("2020_Maize_DA02_RGB1_All_Rounds.xlsx")
+data_environment <- read.delim("2020_NaPPI_env_multisensor.txt")
+```
+
+We can extract the coordinates of each plant with the ISA_EPPN.xlsx dataset, using a made-up function "coordinates_isaTAB".
+
+```{r}
+# Get the coordinates
+isaTAB <- read_excel("ISA_EPPN2020_NaPPI.xlsx", sheet = "s_exp")
+coordinates <- coordinates_isaTAB(isaTAB)
+```
+
+### A. Datasets structures
+We can take a quick look at all the datasets.
+
+- coordinates
+- data_FW
+- data_DM
+- data_imaging
+- data_imaging_raw
+- data_environment
+
+```{r Quick look at the datasets}
+head(coordinates)
+head(data_FW)
+head(data_DM)
+head(data_imaging)
+head(data_environment)
+```
+
+### B. Data manipulation
+
+This next step standardizes diverse datasets by renaming variables for consistency, converting data into appropriate units, adding necessary columns, and merging the datasets.
+
+
+```{r}
+################################################################################
+# COORDINATES
+################################################################################
+# Unit.ID 
+coordinates$Unit.ID <- seq_len(nrow(coordinates))
+# Reference for Sample.Name et Unit.ID
+reference <- coordinates[, c("Sample.Name", "Unit.ID")]
+## We can then copy dataset2$Unit.ID <- reference$Unit.ID[match(dataset2$Sample.Name, reference$Sample.Name)]
+
+################################################################################
+# DATA_FW and DATA_DM 
+################################################################################
+# Time, Date and Timestamp
+data_FW$Date <- as.Date("2020-07-05")
+data_DM$Date <- as.Date("2020-07-05")
+
+# Name of the platform
+data_FW$Platform <- "NaPPI"
+data_DM$Platform <- "NaPPI"
+
+# Unit.ID
+data_FW$Unit.ID <- reference$Unit.ID[match(data_FW$Plant.ID, reference$Sample.Name)]
+data_DM$Unit.ID <- reference$Unit.ID[match(data_DM$Plant.ID, reference$Sample.Name)]
+
+# Soil
+data_FW$Soil <- sapply(strsplit(as.character(data_FW$Plant.Info), split = "_"), '[', 1)
+data_DM$Soil <- sapply(strsplit(as.character(data_DM$Plant.Info), split = "_"), '[', 1)
+
+# Genotype
+data_FW$Genotype <- substr(as.character(data_FW$Plant.Name), start = nchar(as.character(data_FW$Plant.Name)) - 7, stop = nchar(as.character(data_FW$Plant.Name)))
+data_DM$Genotype <- substr(as.character(data_DM$Plant.Name), start = nchar(as.character(data_DM$Plant.Name)) - 7, stop = nchar(as.character(data_DM$Plant.Name)))
+
+
+# Rename the columns for the template
+data_FW$FW_shoot_g <- data_FW$shoot_fresh_biomass_scale_gram
+data_DM$DW_shoot_g <- data_DM$shoot_dry_biomass_scale_gram
+
+################################################################################
+# DATA_IMAGING 
+################################################################################
+# Time, Date and Timestamp
+data_imaging$Timestamp <- data_imaging$`Measuring Time`
+
+data_imaging$Date <- sapply(strsplit(as.character(data_imaging$Timestamp), split = " "), '[', 1)
+data_imaging$Time <- sapply(strsplit(as.character(data_imaging$Timestamp), split = " "), '[', 2)
+
+# Name of the platform
+data_imaging$Platform <- "NaPPI"
+
+# Unit.ID
+data_imaging$Unit.ID <- reference$Unit.ID[match(data_imaging$`Plant ID`, reference$Sample.Name)]
+
+# Rename the columns for the template
+data_imaging <- rename(data_imaging,
+                           S_Area_pixel = AREA_PX,
+                           S_Area_mm_squared = AREA_MM,
+                           S_Perimeter_pixel = PERIMETER_PX,
+                           S_Perimeter_mm = PERIMETER_MM,
+                           S_Compactness = COMPACTNESS,
+                           S_Width_pixel = WIDTH_PX,
+                           S_Width_mm = WIDTH_MM,
+                           S_Height_pixel = HEIGHT_PX,
+                           S_Height_mm = HEIGHT_MM
+                           )
+```
+
+#### Camera angles
+For the NaPPI platform, the variables in the data_imaging are  measured form 3 different camera angles. It is neccessary to consolidate theses measurements into a single value for each variable for the data analysis steps. 
+In this code block, it is done by either taking the maximum of the 3 values or by taking the mean of the 3 values. 
+
+Depending on the variable, the mean or the maximum is taken. The result is stocked in the dataset data_imaging_2.
+
+| Variable | Mean or maximum |
+|:------------:|:-------------------:|
+|Height| Mean|
+|Area|Maximum|
+|Perimeter|Maximum|
+|Width|Maximum|
+|Convex hull|Maximum|
+|Solidity|Maximum|
+|Compactness|Maximum|
+
+```{r}
+# Data frame containing the results
+data_imaging_2 <- data.frame()
+
+for (i in seq(1, nrow(data_imaging), by = 3)) {
+  if (i + 1 <= nrow(data_imaging)) {
+    row1 <- data_imaging[i, ]
+    row2 <- data_imaging[i + 1, ]
+    row3 <- data_imaging[i + 2, ]
+    
+    # Compute the mean or the maximum of the 3 camera angles values
+    mean_and_max_row <- data.frame(
+      Date = row3$Date, # We keep the important columns
+      Time = row3$Time, # We keep the important columns
+      Unit.ID = row3$Unit.ID, # We keep the important columns
+      Timestamp = row3$Timestamp, # We keep the important columns
+      Platform = row3$Platform, # We keep the important columns
+      
+      S_Area_mm_squared = max(c(as.numeric(row1$S_Area_mm_squared), as.numeric(row2$S_Area_mm_squared), as.numeric(row3$S_Area_mm_squared))), 
+      S_Area_pixel = max(c(as.numeric(row1$S_Area_pixel), as.numeric(row2$S_Area_pixel), as.numeric(row3$S_Area_pixel))),
+      
+      S_Perimeter_mm = max(c(as.numeric(row1$S_Perimeter_mm), as.numeric(row2$S_Perimeter_mm), as.numeric(row3$S_Perimeter_mm))),
+      S_Perimeter_pixel = max(c(as.numeric(row1$S_Perimeter_pixel), as.numeric(row2$S_Perimeter_pixel), as.numeric(row3$S_Perimeter_pixel))),
+      
+      
+      S_Compactness = max(c(as.numeric(row1$S_Compactness), as.numeric(row2$S_Compactness), as.numeric(row3$S_Compactness))),
+      
+      S_Width_mm = max(c(as.numeric(row1$S_Width_mm), as.numeric(row2$S_Width_mm), as.numeric(row3$S_Width_mm))),
+      S_Width_pixel = max(c(as.numeric(row1$S_Width_pixel), as.numeric(row2$S_Width_pixel), as.numeric(row3$S_Width_pixel))),
+      
+      
+      S_Height_mm = mean(c(as.numeric(row1$S_Height_mm), as.numeric(row2$S_Height_mm), as.numeric(row3$S_Height_mm))),
+      S_Height_pixel = mean(c(as.numeric(row1$S_Height_pixel), as.numeric(row2$S_Height_pixel), as.numeric(row3$S_Height_pixel)))
+    )
+    
+    # Ajouter les résultats au dataframe final
+    data_imaging_2 <- rbind(data_imaging_2, mean_and_max_row)
+  }
+}
+
+# Afficher le dataframe final
+head(data_imaging_2)
+
+```
+
+#### Unit conversions
+The data template is only in cm, cm² and g. This step converts the data in the right units.
+
+For the NaPPI platform, 4 variables are in mm.
+
+```{r}
+data_imaging_2$S_Height_cm <- 0.01 * data_imaging_2$S_Height_mm
+data_imaging_2$S_Area_cmsquared <- 0.01 * 0.01 * data_imaging_2$S_Area_mm_squared
+data_imaging_2$S_Perimeter_cm <- 0.01 * data_imaging_2$S_Perimeter_mm
+data_imaging_2$S_Width_cm <- 0.01 * data_imaging_2$S_Width_mm
+```
+
+# 2. Data template
+
+### A. Data template: plant_info
+This dataset contains information about the plant: Unit.ID, genotype, replication, row and column location in the greenhouse, and soil treatment.
+
+```{r Template plant_info, include=FALSE}
+plant_info <- data.frame(Unit.ID = factor(data_FW$Unit.ID),
+                 Genotype = factor(data_FW$Genotype),
+                 Soil = factor(data_FW$Soil),
+                 Replication = factor(coordinates$rep),
+                 Row = factor(coordinates$nrow),
+                 Column = factor(coordinates$ncol),
+                 Platform = "NaPPI"
+                 )
+```
+
+### B. Data template: endpoint
+This datasets contains information of the end of the experiment (variables at harvest).
+It is then linked by the Unit.ID to the plant_info data template.
+
+```{r Template endpoint, include=FALSE}
+endpoint <- data.frame(Unit.ID = as.factor(data_FW$Unit.ID),
+                       Time = NA, 
+                       Date = date(data_FW$Date),
+                       Timestamp = NA,
+                       
+                       DW_shoot_g = as.numeric(data_DM$DW_shoot_g),
+                       FW_shoot_g = as.numeric(data_FW$FW_shoot_g),
+                       DW_root_g = NA,
+                       FW_root_g = NA,
+                       Leaf_number= NA,
+                       Plant_height_cm = NA,
+                       DW_plant_g = NA,
+                       Root_length_cm = NA,
+                       Root_number = NA,
+                       Root_angle = NA,
+                       Total_wu = NA,
+                       DW_seed_g = NA,
+                       FW_seed_g = NA,
+                       Leaf_area_cmsquared = NA
+)
+endpoint <- left_join(endpoint, plant_info, by = "Unit.ID")
+```
+
+### C. Data template: timeseries
+This section in divided in three data templates: 
+
+- timeseries
+
+- S_timeseries (variables computed from sideview imaging or image processing)
+
+- T_timeseries (variables computed from topview imaging or image processing)
+
+The time interval between data timestamps varies in each platform.
+They are then linked by the Unit.ID to the plant_info data template. 
+
+
+```{r Template timeseries S_timeseries T_timeseries, include=FALSE}
+
+timeseries <- data.frame(Unit.ID = NA,
+                         Time = NA,
+                         Date = NA,
+                         Timestamp = NA,
+                         
+                         Manual_Plant_height_cm = NA, 
+                         Leaf_number = NA,
+                         Wue = NA,
+                         Plant_biomass = NA,
+                         Ligulated_leaf_number = NA,
+                         Plant_emergence = NA,
+                         Plant_transpiration = NA,
+                         Daily_wu = NA,
+                         Soil_water_potential = NA
+)
+timeseries <- left_join(timeseries, plant_info, by = "Unit.ID")
+                      
+
+S_timeseries <- data.frame(Unit.ID = factor(data_imaging_2$Unit.ID),
+                           Timestamp = data_imaging_2$Timestamp,
+                           Date = date(data_imaging_2$Date),
+                           Time = data_imaging_2$Time,
+                           
+                           S_Height_cm = as.numeric(data_imaging_2$S_Height_cm),
+                           S_Height_pixel = as.numeric(data_imaging_2$S_Height_pixel),
+                           S_Area_cmsquared = as.numeric(data_imaging_2$S_Area_cmsquared),
+                           S_Area_pixel = as.numeric(data_imaging_2$S_Area_pixel),
+                           S_Perimeter_cm = as.numeric(data_imaging_2$S_Perimeter_cm),
+                           S_Perimeter_pixel = as.numeric(data_imaging_2$S_Perimeter_pixel),
+                           S_Convex_hull_area_cmsquared = NA,
+                           S_Solidity = NA,
+                           S_Compactness = as.numeric(data_imaging_2$S_Compactness),
+                           S_Width_cm = as.numeric(data_imaging_2$S_Width_cm),
+                           S_Width_pixel = as.numeric(data_imaging_2$S_Width_pixel),
+                           S_Leaf_area_cmsquared = NA
+)
+S_timeseries <- left_join(S_timeseries, plant_info, by = "Unit.ID")
+
+
+T_timeseries <- data.frame(Unit.ID = NA,
+                           Time = NA, 
+                           Date = NA,
+                           Timestamp = NA,
+                           T_Area_cm_squared = NA,
+                           T_Area_pixel = NA,
+                           T_Perimeter_cm = NA,
+                           T_Perimeter_pixel = NA,
+                           T_Convex_hull_area_cmsquared = NA,
+                           T_Solidity = NA,
+                           T_Compactness = NA,
+                           T_Roundness = NA,
+                           T_Roundness2 = NA,
+                           T_Isotropy = NA,
+                           T_Eccentricity = NA,
+                           T_Rms = NA,
+                           T_Sol = NA
+)
+T_timeseries <- left_join(T_timeseries, plant_info, by = "Unit.ID")
+
+```
+
+### D. NaPPI data templates
+
+- plant_info
+- endpoint
+- timeseries
+- S_timeseries
+- T_timeseries
+
+```{r Data template, echo=FALSE}
+head(plant_info)
+head(endpoint)
+head(timeseries)
+head(S_timeseries)
+head(T_timeseries)
+```
+
+# 3. Export the data templates in .txt
+Stock the new data sets in a new folder.
+
+```{r Export}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/NaPPI")
+
+write.table(plant_info, file = "plant_info.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(endpoint, file = "endpoint.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(timeseries, file = "timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(S_timeseries, file = "S_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(T_timeseries, file = "T_timeseries.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

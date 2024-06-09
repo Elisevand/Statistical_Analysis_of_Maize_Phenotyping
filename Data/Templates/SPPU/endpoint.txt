@@ -1,0 +1,2 @@
+Unit.ID	Time	Date	Timestamp	DW_shoot_g	FW_shoot_g	DW_root_g	FW_root_g	Leaf_number	Plant_height_cm	DW_plant_g	Root_length_cm	Root_number	Root_angle	Total_wu	DW_seed_g	FW_seed_g	Leaf_area_cmsquared	Genotype	Soil	Replication	Row	Column	Platform
+NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA	NA

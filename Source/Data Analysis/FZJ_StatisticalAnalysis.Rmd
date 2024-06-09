@@ -1,0 +1,229 @@
+---
+title: "FZJ_StatisticalAnalysis"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Templates/FZJ")
+```
+
+```{r include=FALSE}
+WDIR <- "C:/Users/elise/Documents/Mémoire/Main/Data"
+subdir <- 'Extracted'
+datadir <- sprintf( '%s/%s', WDIR, subdir)
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+# Import functions
+source("~/Mémoire/Main/Source/functions.R")
+
+
+list.files()
+
+plant_info <- read.table("plant_info.txt", header = TRUE, sep = "\t")
+endpoint <- read.table("endpoint.txt", header = TRUE, sep = "\t")
+
+# plant_info
+plant_info <- lapply(plant_info, factor)
+
+# endpoint
+matching_cols <- intersect(names(endpoint), names(plant_info))
+endpoint[, matching_cols] <- lapply(endpoint[, matching_cols], factor)
+endpoint$Date <- date(endpoint$Date)
+endpoint$Timestamp <- NA
+
+
+
+
+variables <- c("DW_shoot_g", "FW_shoot_g", "DW_root_g")
+
+
+
+
+
+endpoint_clean <- endpoint
+# Run the function on the dataset for all the variables
+endpoint_clean <- detect_replace_outliers_by_genotype(endpoint_clean)
+
+
+endpoint$Plant_type <- substr(endpoint$Genotype, nchar(as.character(endpoint$Genotype)), nchar(as.character(endpoint$Genotype)))
+endpoint_clean$Plant_type <- substr(endpoint_clean$Genotype, nchar(as.character(endpoint_clean$Genotype)), nchar(as.character(endpoint_clean$Genotype)))
+```
+
+
+
+# Statistical modeling for phenotypic traits
+
+The explanatory variable (X) refers to the genotype, which is a categorical variable. The response variables (Y) are the phenotypic data of the variables dataframe.
+
+In this case, the variables are:
+
+And the genotypes are:
+
+```{r}
+print(variables)
+unique(endpoint$Genotype)
+```
+
+### 1. First linear models
+Firstly, we model the Y = X + r + c + e
+Where 
+- Y is the phenotypic trait;
+- X the genotype (fixed effect);
+- r the row effect (fixed or random);
+- c the column effect (fixed or random);
+
+```{r}
+fit_models_fixed <- function(data, trait_name) {
+  fixed_formula <- as.formula(paste(trait_name, "~ Genotype + Row + Column"))
+  fixed_model <- lm(fixed_formula, data)
+  print(paste("Summary for fixed effects model of", trait_name))
+  print(summary(fixed_model))
+  print(anova(fixed_model))
+}
+
+fit_models_random <- function(data, trait_name)  {
+  random_formula <- as.formula(paste(trait_name, "~ Genotype + (1|Row) + (1|Column)"))
+  random_model <- lmer(random_formula, data)
+  print(paste("Summary for random effects model of", trait_name))
+  print(summary(random_model))
+  print(anova(random_model))
+  print(ranova(random_model))
+}
+
+for (trait in variables) {
+  fit_models_fixed(endpoint_clean, trait)
+}
+
+for (trait in variables) {
+  fit_models_random(endpoint_clean, trait)
+}
+```
+
+### 2. Linear models with Plant_type
+Model with X as Plant_type instead of Genotype, and row and column effects as random effects.
+Plant_type is defined as H for Hybrid, L for pure Line and T for Tester. 
+
+```{r}
+endpoint_clean$Plant_type <- as.factor(endpoint_clean$Plant_type)
+endpoint_clean$Plant_type <- relevel(endpoint_clean$Plant_type, ref = "T") # T as base level
+
+fit_model_plant_type <- function(data, trait) {
+  # Random effects model with Plant_type as a fixed effect
+  model_formula <- as.formula(paste(trait, "~ Plant_type + (1|Row) + (1|Column)"))
+  model <- lmer(model_formula, data)
+  print(paste("Summary for mixed effects model of", trait))
+  print(summary(model))
+  print(anova(model))
+  print(ranova(model))
+}
+
+for (trait in variables) {
+  fit_model_plant_type(endpoint_clean, trait)
+}
+```
+
+### 3. Linear models with asreml library
+```{r}
+modasreml <- asreml(fixed = DW_shoot_g ~ Genotype,
+                    random = ~ Row + Column,
+                    residual = ~  NULL,
+                    data = endpoint_clean)
+
+plot(modasreml)
+
+summary(modasreml)$varcomp
+```
+
+### 4. Linear models with Soil variable
+Model with Soil as explicative variable.
+
+```{r eval=FALSE, include=FALSE}
+fit_models_for_soil_genotype <- function(data, trait) {
+  # Base model with Soil as fixed effect and Row, Column as random effects
+  mod0 <- lmer(as.formula(paste(trait, "~ Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for base model of", trait))
+  print(summary(mod0))
+  print("Random effects ANOVA for base model:")
+  print(ranova(mod0))
+  
+  # Model with Genotype and Soil interaction
+  mod1 <- lmer(as.formula(paste(trait, "~ Genotype * Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for interaction model of", trait))
+  print(summary(mod1))
+  print("Random effects ANOVA for interaction model:")
+  print(ranova(mod1))
+  
+  # Model with Genotype and Soil without interaction
+  mod2 <- lmer(as.formula(paste(trait, "~ Genotype + Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for no interaction model of", trait))
+  print(summary(mod2))
+  print("Random effects ANOVA for no interaction model:")
+  print(ranova(mod2))
+}
+
+# Iterate through each variable and fit models
+for (trait in variables) {
+  fit_models_for_soil_genotype(endpoint_clean, trait)
+}
+```
+
+### 5. Linear models with Soil variable with Plant_type
+
+```{r eval=FALSE, include=FALSE}
+fit_models_for_soil_planttype <- function(data, trait) {
+  # Base model with Soil as fixed effect and Row, Column as random effects
+  mod0 <- lmer(as.formula(paste(trait, "~ Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for base model of", trait))
+  print(summary(mod0))
+  print("Random effects ANOVA for base model:")
+  print(ranova(mod0))
+  
+  # Model with Plant_type and Soil interaction
+  mod1 <- lmer(as.formula(paste(trait, "~ Plant_type * Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for interaction model of", trait))
+  print(summary(mod1))
+  print("Random effects ANOVA for interaction model:")
+  print(ranova(mod1))
+  
+  # Model with Plant_type and Soil without interaction
+  mod2 <- lmer(as.formula(paste(trait, "~ Plant_type + Soil + (1|Row) + (1|Column)")), data = data)
+  print(paste("Summary for no interaction model of", trait))
+  print(summary(mod2))
+  print("Random effects ANOVA for no interaction model:")
+  print(ranova(mod2))
+}
+
+# Iterate through each variable and fit models
+for (trait in variables) {
+  fit_models_for_soil_planttype(endpoint_clean, trait)
+}
+```
+

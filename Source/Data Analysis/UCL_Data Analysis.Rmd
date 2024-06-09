@@ -1,0 +1,296 @@
+---
+title: "UCL Data Analysis"
+author: "Elise"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false 
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/elise/Documents/Mémoire/Main/Data/Templates/UCL")
+```
+
+Set the right working directory.
+
+```{r}
+setwd("C:/Users/elise/Documents/Mémoire/Main/Data/Templates/UCL")
+```
+
+
+```{r echo=TRUE, , include=FALSE}
+rm(list = ls())
+
+WDIR <- "C:/Users/elise/Documents/Mémoire/Main/Data"
+subdir <- 'Extracted'
+datadir <- sprintf( '%s/%s', WDIR, subdir)
+
+library(statgenHTP)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(readxl)
+library(janitor)
+library(flextable)
+library(skimr)
+library(rstatix)
+library(visreg)
+library(lsmeans)
+library(car)
+library(scales)
+library(viridis)
+library(ggforce)
+library(asreml)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(desplot)
+# Import functions
+source("~/Mémoire/Main/Source/functions.R")
+```
+
+# Data importation
+
+Import the data sets extracted from the Data Preparation R Markdown.
+
+```{r}
+list.files()
+
+plant_info <- read.table("plant_info.txt", header = TRUE, sep = "\t")
+endpoint <- read.table("endpoint.txt", header = TRUE, sep = "\t")
+```
+
+Convert the columns to factor and date formats.
+
+```{r}
+# plant_info
+plant_info <- lapply(plant_info, factor)
+
+# endpoint
+matching_cols <- intersect(names(endpoint), names(plant_info))
+endpoint[, matching_cols] <- lapply(endpoint[, matching_cols], factor)
+endpoint$Date <- date(endpoint$Date)
+endpoint$Timestamp <- NA
+
+# timeseries
+# No data
+
+# S_timeseries
+# No data
+
+# T_timeseries
+# No data
+```
+
+Collect the variables of every data template and print the names of the variables. This serves as a double check.
+
+```{r}
+platform <- "UCL"
+
+# endpoint
+df <- endpoint[,colSums(is.na(endpoint))<nrow(endpoint)]
+genotype_index <- which(colnames(df) == "Genotype")
+variables <- colnames(df[, c(3:(genotype_index - 1))]) # We remove the 3 first columns that are "Unit.ID" and "Date" etc
+
+print(paste(platform, ": The variables for endpoint are", paste(variables, collapse = ", "), sep = " "))
+
+```
+
+Remove unknown genotypes
+```{r}
+endpoint <- endpoint %>%
+  filter(Genotype != "Local")
+```
+
+Add a column Plant_type with three levels, H L and T.
+This variable is useful to test for heterosis effects.
+
+```{r}
+endpoint$Plant_type <- substr(endpoint$Genotype, nchar(as.character(endpoint$Genotype)), nchar(as.character(endpoint$Genotype)))
+```
+
+
+
+
+
+# 1. Endpoint dataframe
+## A. Exploration of data 
+### Exploration tables using the rstatix, janitor and skimr packages
+```{r}
+endpoint %>% 
+  count(Genotype)
+
+endpoint %>%
+  tabyl(Genotype, Column) %>%
+  adorn_totals("row") %>%
+  adorn_percentages("row") %>%
+  adorn_pct_formatting() %>%
+  adorn_ns() %>%
+  adorn_title("combined")
+
+endpoint %>%
+  tabyl(Genotype, Row) %>%
+  adorn_totals("row") %>%
+  adorn_percentages("row") %>%
+  adorn_pct_formatting() %>%
+  adorn_ns() %>%
+  adorn_title("combined")
+
+get_summary_stats(data = endpoint, 
+                  variables,
+                  type = "common")
+
+```
+
+```{r}
+skim(endpoint[variables])
+```
+
+### Data visualization
+
+Using several functions that are located in the functions.R script
+
+#### Boxplots
+
+```{r}
+create_boxplots(endpoint, variables, "Genotype")
+create_boxplots(endpoint, variables, "Plant_type")
+```
+
+#### Correlation plots
+
+```{r}
+for (i in 1:(length(variables) - 1)) {
+  for (j in (i + 1):length(variables)) {
+    calculate_correlation_plot(endpoint, variables[i], variables[j])
+  }
+}
+```
+
+## B. Normality hypothesis and outlier detection
+
+Test for normality hypothesis and plot density histogram.
+The red curve is the normal distribution, the blue dotted curve is the data density curve. 
+
+```{r}
+normality_results <- normality_test_histogram(endpoint)
+```
+
+Remove the outliers, replacing them with NULL values and normality visual verification.
+
+The function detect_replace_ouliers_by_genotype checks for outlying values, using the Tukey method.
+
+Then run the function on all variables of the dataset. 
+
+```{r}
+endpoint_clean <- endpoint
+# Run the function on the dataset for all the variables
+endpoint_clean <- detect_replace_outliers_by_genotype(endpoint_clean)
+```
+
+### Boxplots after outlier detection
+
+```{r}
+create_boxplots(endpoint_clean, variables, "Genotype")
+create_boxplots(endpoint_clean, variables, "Plant_type")
+```
+
+### Violin and sina plots after outlier detection
+
+```{r}
+create_violin_plots(endpoint_clean, variables, "Genotype")
+create_violin_plots(endpoint_clean, variables, "Plant_type")
+```
+
+### Exploration statistics for the variables after outlier detection
+
+```{r}
+skim(endpoint_clean[variables])
+
+for (var in variables) {
+  cat("\nSummary for:", var, "\n")
+  endpoint_clean %>% 
+    group_by(Genotype) %>% 
+    summarize(mean    = mean(get(var), na.rm = TRUE),
+              std.dev = sd(get(var), na.rm = TRUE),
+              n_missing  = sum(is.na(get(var)))) %>% 
+    arrange(desc(mean)) %>%
+    print(n = Inf)
+}
+```
+
+# 2. Exploration of the timeseries data
+In this part, we look at the timeseries, S_timeseries and T_timeseries datasets, also using several functions, located in the functions.R script. 
+
+## Number of data observations per day for the traits of the timeseries datasets
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+## A. Exploration of the timeseries dataframe 
+
+Scatter plots by Genotype
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatterplots for all genotypes by Plant type (Hybride, Line, EPPN20_T) with smooth line.
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatter plots for all genotypes by water treatment
+```{r}
+print(paste0("No data for", platform))
+```
+
+
+## B. Exploration of the S_timeseries dataframe
+
+Scatter plots by Genotype
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatterplots for all genotypes by Plant type (Hybride, Line, EPPN20_T) with smooth line.
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatter plots for all genotypes by water treatment
+```{r}
+print(paste0("No data for", platform))
+```
+
+
+## C. Exploration of the T_timeseries dataframe
+
+Scatter plots by Genotype
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatterplots for all genotypes by Plant type (Hybride, Line, EPPN20_T) with smooth line.
+
+```{r}
+print(paste0("No data for", platform))
+```
+
+Scatter plots for all genotypes by water treatment
+```{r}
+print(paste0("No data for", platform))
+```
+
+
